@@ -1,18 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { UploadModal } from '@/components/UploadModal';
 
 export default function UploadPage() {
-  const [isOpen, setIsOpen] = useState(true);
-
-  return (
-    <>
-      {isOpen && (
-        <UploadModal
-          onClose={() => setIsOpen(false)}
-        />
-      )}
-    </>
-  );
+  const router = useRouter();
+  return <UploadModal onClose={() => router.back()} />;
 }

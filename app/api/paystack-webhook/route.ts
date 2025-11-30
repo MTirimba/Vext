@@ -1,76 +1,163 @@
-// app/api/paystack-webhook/route.ts
-import { NextResponse } from 'next/server';
-import crypto from 'crypto';
-import { db } from '@/lib/firebase';
-import { doc, updateDoc, getDoc, increment } from 'firebase/firestore';
+// /workspaces/Vext/app/api/paystack-webhook/route.ts
+import { NextResponse } from "next/server";
+import crypto from "crypto";
+import { adminDb } from "@/lib/firebaseAdmin";
 
-export async function POST(request: Request) {
-  const payload = await request.text();
-  const sig = request.headers.get('x-paystack-signature') || '';
-  const secret = process.env.PAYSTACK_SECRET_KEY || '';
-  const hash = crypto.createHmac('sha512', secret).update(payload).digest('hex');
+/**
+ * Universal Paystack webhook for both payments & payouts
+ */
+export async function POST(req: Request) {
+  try {
+    const payload = await req.text();
+    const signature = req.headers.get("x-paystack-signature") || "";
+    const secret = process.env.PAYSTACK_SECRET_KEY || "";
 
-  if (sig !== hash) {
-    return NextResponse.json({ error: 'Invalid signature' }, { status: 400 });
-  }
+    const computedHash = crypto
+      .createHmac("sha512", secret)
+      .update(payload)
+      .digest("hex");
 
-  const body = JSON.parse(payload);
-  const event = body.event;
-  const { reference, status, metadata } = body.data;
+    // ❌ Invalid webhook signature
+    if (signature !== computedHash) {
+      console.warn("⚠️ Invalid Paystack signature — ignoring request.");
+      return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
+    }
 
-  // ✅ Booking payment success
-  if (event === 'charge.success' && status === 'success') {
-    const bookingId = metadata?.bookingId;
-    if (bookingId) {
-      const bookingRef = doc(db, 'bookings', bookingId);
-      await updateDoc(bookingRef, { status: 'confirmed', paymentReference: reference });
+    const body = JSON.parse(payload);
+    const event = body.event;
+    const data = body.data || {};
 
-      // Fetch booking details
-      const bookingSnap = await getDoc(bookingRef);
-      const bookingData = bookingSnap.data();
+    console.log(`📩 Paystack Webhook received: ${event}`, data);
 
-      // Send SMS to provider
-      if (bookingData?.providerPhone) {
-        const firstName = (bookingData.clientName || '').split(' ').filter(Boolean)[0] || 'Client';
-        const bookingLink = `${process.env.NEXT_PUBLIC_BASE_URL || ''}/bookings/${bookingId}`;
-        const dateStr = new Date(bookingData.date).toDateString();
-        const timeStr = bookingData.time || '';
+    // === 1️⃣ Booking Payment (charge.success) ===
+    if (event === "charge.success" && data.status === "success") {
+      const bookingId = data.metadata?.bookingId;
+      if (!bookingId) {
+        console.warn("⚠️ charge.success without bookingId metadata");
+      } else {
+        const bookingRef = adminDb.collection("bookings").doc(bookingId);
 
-        await fetch(`${process.env.NEXT_PUBLIC_BASE_URL || ''}/api/send-sms`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            to: bookingData.providerPhone,
-            message: `Hi ${bookingData.creatorName || 'Provider'}, you have a new booking (Order #${bookingId}) from ${firstName} on ${dateStr} at ${timeStr}. Please accept or reject here: ${bookingLink}`,
-          }),
-        });
+        // ✅ Update booking record
+        await bookingRef.set(
+          {
+            status: "confirmed",
+            paymentReference: data.reference,
+            updatedAt: new Date(),
+          },
+          { merge: true }
+        );
+
+        // ✅ Update provider balance
+        const providerUid = data.metadata?.providerUid;
+        const amount = data.amount / 100; // Convert from kobo
+        const platformCut = amount * 0.1;
+        const providerAmount = amount - platformCut;
+
+        if (providerUid) {
+          await adminDb
+            .collection("users")
+            .doc(providerUid)
+            .set(
+              {
+                wallet: {
+                  available: adminDb.FieldValue.increment(providerAmount),
+                },
+              },
+              { merge: true }
+            );
+
+          await adminDb
+            .collection("platform")
+            .doc("earnings")
+            .set(
+              {
+                totalEarnings: adminDb.FieldValue.increment(platformCut),
+              },
+              { merge: true }
+            );
+        }
       }
     }
-  }
 
-  // ✅ Withdrawal success
-  if (event === 'transfer.success') {
-    const { uid } = metadata || {};
-    if (uid) {
-      const wRef = doc(db, `users/${uid}/withdrawals`, reference);
-      await updateDoc(wRef, { status: 'success', completedAt: new Date() });
+    // === 2️⃣ Withdrawal Success ===
+    if (event === "transfer.success") {
+      const reference = data.reference;
+      const indexDoc = await adminDb
+        .collection("_withdrawal_index")
+        .doc(reference)
+        .get();
+
+      if (indexDoc.exists) {
+        const { providerId, withdrawalId } = indexDoc.data();
+        const wRef = adminDb
+          .collection("users")
+          .doc(providerId)
+          .collection("withdrawals")
+          .doc(withdrawalId);
+
+        await wRef.set(
+          {
+            status: "success",
+            completedAt: new Date(),
+            paystack: {
+              transfer_code: data.transfer_code,
+              status: data.status,
+              reference: data.reference,
+              transaction_date: data.transferred_at || new Date(),
+            },
+          },
+          { merge: true }
+        );
+
+        console.log(`✅ Withdrawal ${withdrawalId} marked as success.`);
+      } else {
+        console.warn(`⚠️ No index found for withdrawal reference ${reference}`);
+      }
     }
-  }
 
-  // ❌ Withdrawal failed → refund wallet
-  if (event === 'transfer.failed') {
-    const { uid, amount, fee } = metadata || {};
-    if (uid) {
-      const wRef = doc(db, `users/${uid}/withdrawals`, reference);
-      await updateDoc(wRef, { status: 'failed', failedAt: new Date() });
+    // === 3️⃣ Withdrawal Failed or Reversed ===
+    if (event === "transfer.failed" || event === "transfer.reversed") {
+      const reference = data.reference;
+      const indexDoc = await adminDb
+        .collection("_withdrawal_index")
+        .doc(reference)
+        .get();
 
-      // Refund wallet
-      const userRef = doc(db, 'users', uid);
-      await updateDoc(userRef, {
-        'wallet.available': increment(amount + fee), // refund full deducted amount
-      });
+      if (indexDoc.exists) {
+        const { providerId, withdrawalId } = indexDoc.data();
+
+        const wRef = adminDb
+          .collection("users")
+          .doc(providerId)
+          .collection("withdrawals")
+          .doc(withdrawalId);
+
+        await wRef.set(
+          {
+            status: "failed",
+            failedAt: new Date(),
+            paystack: {
+              transfer_code: data.transfer_code,
+              status: data.status,
+              reason: data.reason || "Transfer failed or reversed",
+            },
+          },
+          { merge: true }
+        );
+
+        console.log(`❌ Withdrawal ${withdrawalId} marked as failed/reversed.`);
+      } else {
+        console.warn(`⚠️ No index found for failed withdrawal ${reference}`);
+      }
     }
-  }
 
-  return NextResponse.json({ received: true });
+    // ✅ ACK response
+    return NextResponse.json({ received: true });
+  } catch (err: any) {
+    console.error("⚠️ Paystack Webhook Error:", err);
+    return NextResponse.json(
+      { error: "Webhook processing error" },
+      { status: 500 }
+    );
+  }
 }

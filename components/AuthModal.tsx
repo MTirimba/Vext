@@ -13,12 +13,7 @@ import {
 } from 'firebase/auth';
 import { auth, db } from '@/lib/firebase';
 import { createUserProfile } from '@/lib/auth';
-import {
-  collection,
-  getDocs,
-  query,
-  where,
-} from 'firebase/firestore';
+import { collection, getDocs, query, where } from 'firebase/firestore';
 
 // Phone input (same one used in Profile)
 import PhoneInput from 'react-phone-number-input';
@@ -79,7 +74,7 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
     }
   };
 
-  // Email/Password submit (email only; not mixing phone here since phone tab exists)
+  // Email/Password submit
   const handleSubmitEmail = async () => {
     try {
       const email = emailOrPhoneForEmailFlow.trim();
@@ -187,7 +182,7 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
-      <div className="bg-white p-6 rounded-xl w-[380px] max-w-[92vw] text-center shadow-xl relative">
+      <div className="bg-white p-6 rounded-xl w-[420px] max-w-[92vw] text-center shadow-xl relative">
         <button
           onClick={onClose}
           className="absolute top-2 right-3 text-gray-500 hover:text-gray-700 text-xl"
@@ -197,25 +192,33 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
         </button>
 
         {/* Logo — larger */}
-        <div className="mb-4">
+        <div className="mb-5">
           <img
             src="/vextup-logo.png"
             alt="VEXTUP"
-            className="h-16 mx-auto object-contain"  /* increased from ~h-10 */
+            className="h-20 mx-auto object-contain" /* larger logo */
           />
         </div>
 
         {/* Tabs */}
-        <div className="flex justify-center gap-2 mb-4">
+        <div className="flex justify-center gap-2 mb-5">
           <button
             onClick={() => setTab('email')}
-            className={`px-3 py-1.5 rounded-full text-sm font-medium ${tab === 'email' ? 'bg-black text-white' : 'bg-gray-200 text-gray-800'}`}
+            className={`px-3.5 py-1.5 rounded-full text-sm font-medium transition ${
+              tab === 'email'
+                ? 'text-white bg-gradient-to-r from-emerald-700 via-emerald-600 to-green-600 shadow-sm'
+                : 'bg-gray-200 text-gray-800 hover:bg-gray-300'
+            }`}
           >
             Email / Password
           </button>
           <button
             onClick={() => setTab('phone')}
-            className={`px-3 py-1.5 rounded-full text-sm font-medium ${tab === 'phone' ? 'bg-black text-white' : 'bg-gray-200 text-gray-800'}`}
+            className={`px-3.5 py-1.5 rounded-full text-sm font-medium transition ${
+              tab === 'phone'
+                ? 'text-white bg-gradient-to-r from-emerald-700 via-emerald-600 to-green-600 shadow-sm'
+                : 'bg-gray-200 text-gray-800 hover:bg-gray-300'
+            } ${phoneTabDisabled ? 'opacity-70 cursor-not-allowed' : ''}`}
             disabled={phoneTabDisabled}
           >
             Phone (OTP)
@@ -227,7 +230,7 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
           <div className="space-y-3">
             <button
               onClick={handleGoogle}
-              className="w-full py-2 rounded-md bg-black text-white font-medium hover:bg-gray-900"
+              className="w-full py-2 rounded-md text-white font-medium transition hover:brightness-95 bg-gradient-to-r from-emerald-800 via-emerald-700 to-green-700"
             >
               Continue with Google
             </button>
@@ -251,7 +254,7 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
 
             <button
               onClick={handleSubmitEmail}
-              className="w-full py-2 rounded-md bg-[#0F7A5F] text-white font-medium hover:opacity-90"
+              className="w-full py-2 rounded-md text-white font-medium hover:opacity-95 bg-gradient-to-r from-emerald-700 via-emerald-600 to-green-600"
             >
               {isSignUp ? 'Create Account' : 'Sign In'}
             </button>
@@ -260,7 +263,7 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
               {isSignUp ? 'Already have an account?' : "Don't have an account?"}{' '}
               <button
                 onClick={toggleMode}
-                className="text-[#0F7A5F] hover:underline"
+                className="text-emerald-700 hover:underline"
               >
                 {isSignUp ? 'Sign in' : 'Sign up'}
               </button>
@@ -270,7 +273,7 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
 
         {/* -------- PHONE TAB -------- */}
         {tab === 'phone' && (
-          <div className="space-y-3">
+          <div className="space-y-3 text-left">
             {/* Country picker + phone (same component as Profile) */}
             <PhoneInput
               international
@@ -286,11 +289,11 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
                 <button
                   onClick={sendOtp}
                   disabled={loading}
-                  className="w-full py-2 rounded-md bg-[#0F7A5F] text-white font-medium hover:opacity-90 disabled:opacity-50"
+                  className="w-full py-2 rounded-md text-white font-medium hover:opacity-95 disabled:opacity-60 bg-gradient-to-r from-emerald-700 via-emerald-600 to-green-600"
                 >
                   {loading ? 'Sending…' : 'Send Code'}
                 </button>
-                <p className="text-xs text-gray-500">
+                <p className="text-xs text-gray-500 text-center">
                   We’ll send a 6-digit code via SMS to verify it’s you.
                 </p>
               </>
@@ -305,7 +308,7 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
 
                 {/* If phone belongs to an existing email profile, ask for password to link */}
                 {linkingInfo?.email && (
-                  <div className="text-left space-y-1">
+                  <div className="space-y-1">
                     <div className="text-sm">
                       This number matches an existing account: <b>{linkingInfo.email}</b>
                     </div>
@@ -322,7 +325,7 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
                 <button
                   onClick={confirmOtp}
                   disabled={loading}
-                  className="w-full py-2 rounded-md bg-[#0F7A5F] text-white font-medium hover:opacity-90 disabled:opacity-50"
+                  className="w-full py-2 rounded-md text-white font-medium hover:opacity-95 disabled:opacity-60 bg-gradient-to-r from-emerald-700 via-emerald-600 to-green-600"
                 >
                   {loading ? 'Verifying…' : linkingInfo?.email ? 'Verify & Link' : 'Verify & Sign In'}
                 </button>

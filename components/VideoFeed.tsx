@@ -1,3 +1,4 @@
+// /workspaces/Vext/components/VideoFeed.tsx
 'use client';
 
 import { useEffect, useState, useRef } from 'react';
@@ -9,36 +10,73 @@ import { useAuthState } from 'react-firebase-hooks/auth';
 import {
   FaChevronDown,
   FaChevronUp,
+  FaChevronLeft,
+  FaChevronRight,
   FaHeart,
   FaRegHeart,
   FaCommentDots,
   FaShare,
   FaUserPlus,
   FaUserCheck,
+  FaSearch,
+  FaTimes,
+  FaImages,
 } from 'react-icons/fa';
 import { useRouter } from 'next/navigation';
 import { CommentModal } from './CommentModal';
 import BookingModal from './BookingModal';
 import { EditVideoModal } from './EditVideoModal';
-import { AuthModal } from './AuthModal';
+import AuthModal from './AuthModal';
+
+// 🧠 feed ranking
+import {
+  rankVideos,
+  signalsFromLocalStorage,
+  type VideoDoc as AlgoVideoDoc,
+} from '@/lib/feedAlgo';
+
+// --- types
+interface MediaItem {
+  url: string;
+  type?: 'image' | 'video';
+  name?: string;
+}
 
 interface VideoDoc {
-  url: string;
+  url: string; // legacy primary url
   title?: string;
   description?: string;
   userId?: string;
   serviceCost?: number;
   addons?: { name: string; cost: number; unit: string }[];
   id: string;
-  videoId?: string; // ✅ added so Share uses it
+  videoId?: string;
+
+  // NEW: createdAt for freshness (if present on your doc)
+  createdAt?: number;
+
+  // carousel fields
+  media?: MediaItem[];
+  hasCarousel?: boolean;
+  coverUrl?: string;
+  specialInstructions?: string | null;
 }
 
 interface UserProfile {
   username?: string;
+  personalUsername?: string;
+  businessUsername?: string;
   profilePhoto?: string;
+  businessProfilePhoto?: string;
   isServiceProvider?: boolean;
   location?: string;
   businessName?: string;
+}
+
+/* ---------------- helpers ---------------- */
+
+function normalizeHandle(v?: string | null) {
+  return (v || '').trim().toLowerCase();
 }
 
 export default function VideoFeed() {
@@ -52,7 +90,6 @@ export default function VideoFeed() {
   const [bookingVideo, setBookingVideo] = useState<VideoDoc | null>(null);
   const [editingVideo, setEditingVideo] = useState<VideoDoc | null>(null);
 
-  // Reuse the same refs/state names, but now for a scroll-snap container
   const sliderRef = useRef<HTMLDivElement | null>(null);
   const sliderInstanceRef = useRef<any>(null);
   const [isSliderReady, setIsSliderReady] = useState(false);
@@ -63,21 +100,43 @@ export default function VideoFeed() {
   const [username, setUsername] = useState('');
   const router = useRouter();
 
-  // Initialize "instance" and ready flag when DOM is mounted / videos change
+  // 🔎 slide-out search UI state (only used to send query to /search)
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+
+  // 🧩 Track current vertical index
+  const [currentIndex, setCurrentIndex] = useState(0);
+
+  // 🧭 Per-post carousel index (postId → index)
+  const [mediaIndexMap, setMediaIndexMap] = useState<Record<string, number>>({});
+
+  // 🖐️ Per-post touch positions for swipe
+  const touchStartXRef = useRef<Record<string, number>>({});
+  const touchStartYRef = useRef<Record<string, number>>({});
+
+  // Helpers
+  const isImageUrl = (url: string) => {
+    if (!url) return false;
+    const u = url.split('?')[0].toLowerCase();
+    return /\.(png|jpe?g|gif|webp|avif|bmp)$/.test(u) || url.startsWith('data:image');
+  };
+
+  const getMediaList = (v: VideoDoc): MediaItem[] => {
+    if (v.media && v.media.length > 0) return v.media;
+    return v.url ? [{ url: v.url, type: isImageUrl(v.url) ? 'image' : 'video' }] : [];
+  };
+
   useEffect(() => {
     if (sliderRef.current) {
-      sliderInstanceRef.current = sliderRef.current; // truthy so existing checks still work
+      sliderInstanceRef.current = sliderRef.current;
       setIsSliderReady(true);
     }
   }, [videos.length]);
 
-  // Play/pause currently visible video (≈ keen-slider slideChanged)
   useEffect(() => {
     const root = sliderRef.current;
     if (!root) return;
-
     const videosEls = Array.from(root.querySelectorAll('video')) as HTMLVideoElement[];
-    // Pause all initially
     videosEls.forEach(v => v.pause());
 
     const observer = new IntersectionObserver(
@@ -86,6 +145,8 @@ export default function VideoFeed() {
           const vid = entry.target as HTMLVideoElement;
           if (entry.isIntersecting && entry.intersectionRatio >= 0.6) {
             vid.play().catch(() => {});
+            const idx = videosEls.indexOf(vid);
+            if (idx >= 0) setCurrentIndex(idx);
           } else {
             vid.pause();
           }
@@ -98,7 +159,6 @@ export default function VideoFeed() {
     return () => observer.disconnect();
   }, [videos.map(v => v.id).join('|')]);
 
-  // One-video-per-wheel step (like the plugin), throttled
   useEffect(() => {
     const el = sliderRef.current;
     if (!el) return;
@@ -125,93 +185,208 @@ export default function VideoFeed() {
       el.removeEventListener('wheel', onWheel as EventListener);
       clearTimeout(wheelTimeout);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSliderReady, videos.length]);
 
+  // ------------------------------
+  // Fetch videos once (then rank)
+  // ------------------------------
   useEffect(() => {
     (async () => {
-      const snap = await getDocs(query(collection(db, 'videos'), orderBy('createdAt', 'desc')));
-      const docs = snap.docs.map(d => ({ ...(d.data() as VideoDoc), id: d.id }));
-      console.log("Loaded videos:", docs);
-      setAllVideos(docs);
-      const shuffledVideos = [...docs].sort(() => Math.random() - 0.5);
-      setVideos(shuffledVideos);
+      try {
+        const snap = await getDocs(query(collection(db, 'videos'), orderBy('createdAt', 'desc')));
+        const docs = snap.docs.map(d => ({ ...(d.data() as VideoDoc), id: d.id }));
 
-      const uids = [...new Set(docs.map(v => v.userId).filter(Boolean))];
-      const profiles: Record<string, UserProfile> = {};
-      await Promise.all(
-        uids.map(async id => {
-          const ps = await getDoc(doc(db, 'users', id!));
-          if (ps.exists()) profiles[id!] = ps.data() as UserProfile;
-        })
-      );
-      setUserProfiles(profiles);
+        // keep raw pool
+        setAllVideos(docs);
 
-      if (user) {
+        // build initial ranking without follow signals (not yet loaded)
+        const localSignals = signalsFromLocalStorage();
+
+        const rankedInitial = rankVideos(
+          docs as unknown as AlgoVideoDoc[],
+          {
+            userId: user?.uid,
+            followsByCreatorId: {}, // filled later once we fetch followMap
+            ...localSignals,
+          },
+          {
+            freshnessHalfLifeHours: 24,
+            maxClusterPerCreator: 2,
+          }
+        );
+
+        // honor lastVideoId pin-to-top behavior
+        const savedId = typeof window !== 'undefined' ? localStorage.getItem('lastVideoId') : null;
+        let orderedVideos = rankedInitial as VideoDoc[];
+
+        if (savedId) {
+          const savedIndex = orderedVideos.findIndex(v => v.id === savedId);
+          if (savedIndex > -1) {
+            const [found] = orderedVideos.splice(savedIndex, 1);
+            orderedVideos = [found, ...orderedVideos];
+          }
+        }
+
+        setVideos(orderedVideos);
+
+        // scroll to saved after first paint
+        if (savedId && sliderRef.current) {
+          setTimeout(() => {
+            const idx = orderedVideos.findIndex(v => v.id === savedId);
+            if (idx >= 0 && sliderRef.current) {
+              const h = sliderRef.current.clientHeight || window.innerHeight;
+              sliderRef.current.scrollTo({ top: idx * h, behavior: 'auto' });
+            }
+          }, 600);
+        }
+
+        // fetch minimal creator profiles (for pills/booking)
+        const uids = [...new Set(docs.map(v => v.userId).filter(Boolean))];
+        const profiles: Record<string, UserProfile> = {};
+        await Promise.all(
+          uids.map(async id => {
+            const ps = await getDoc(doc(db, 'users', id!));
+            if (ps.exists()) profiles[id!] = ps.data() as UserProfile;
+          })
+        );
+        setUserProfiles(profiles);
+
+      } catch (err) {
+        console.error('videos fetch error', err);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ------------------------------
+  // Likes/Follows when user changes
+  // ------------------------------
+  useEffect(() => {
+    if (!user || videos.length === 0) {
+      if (!user) {
+        setLikesMap({});
+        setFollowMap({});
+      }
+      return;
+    }
+
+    (async () => {
+      try {
         const lm: Record<string, boolean> = {};
-        await Promise.all(docs.map(async v => {
+        await Promise.all(videos.map(async v => {
           const ldoc = await getDoc(doc(db, 'videos', v.id, 'likes', user.uid!));
           lm[v.id] = ldoc.exists();
         }));
         setLikesMap(lm);
 
+        const uids = [...new Set(videos.map(v => v.userId).filter(Boolean))];
         const fl: Record<string, boolean> = {};
         await Promise.all(uids.map(async id => {
           const fdoc = await getDoc(doc(db, 'users', id!, 'followers', user.uid!));
           fl[id!] = fdoc.exists();
         }));
         setFollowMap(fl);
+      } catch (err) {
+        console.error('likes/follows fetch error', err);
       }
-    })().catch(console.error);
-  }, [user]);
+    })();
+  }, [user, videos]);
 
+  // re-rank once followMap is known (gives social boost)
+  useEffect(() => {
+    if (allVideos.length === 0) return;
+    const localSignals = signalsFromLocalStorage();
+    const ranked = rankVideos(
+      allVideos as unknown as AlgoVideoDoc[],
+      {
+        userId: user?.uid,
+        followsByCreatorId: followMap,
+        ...localSignals,
+      },
+      {
+        freshnessHalfLifeHours: 24,
+        maxClusterPerCreator: 2,
+      }
+    ) as VideoDoc[];
+
+    // keep current savedId on top if set
+    const savedId = typeof window !== 'undefined' ? localStorage.getItem('lastVideoId') : null;
+    let ordered = ranked;
+    if (savedId) {
+      const i = ordered.findIndex(v => v.id === savedId);
+      if (i > -1) {
+        const [found] = ordered.splice(i, 1);
+        ordered = [found, ...ordered];
+      }
+    }
+    setVideos(ordered);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(followMap), allVideos.length]);
+
+  // restore username/isProvider
   useEffect(() => {
     if (!user) return;
     getDoc(doc(db, 'users', user.uid)).then(snap => {
-      const data = snap.data();
+      const data = snap.data() as any;
       if (data) {
         setIsProvider(!!data.isProvider);
-        setUsername(data.username || '');
+        // For top-right handle, use personal handle if present
+        const personalHandle = data.personalUsername || data.username || '';
+        setUsername(personalHandle);
       }
     });
   }, [user]);
 
-  // Infinite scroll down
+  // restore lastVideoId position
+  useEffect(() => {
+    if (!user) return;
+    const savedId = typeof window !== 'undefined' ? localStorage.getItem('lastVideoId') : null;
+    if (!savedId) return;
+
+    if (videos.length === 0) return;
+
+    const idx = videos.findIndex(v => v.id === savedId);
+    if (idx >= 0 && sliderRef.current) {
+      const h = sliderRef.current.clientHeight || window.innerHeight;
+      sliderRef.current.scrollTo({ top: idx * h, behavior: 'auto' });
+      setTimeout(() => {
+        try { localStorage.removeItem('lastVideoId'); } catch {}
+      }, 200);
+    } else {
+      try { localStorage.removeItem('lastVideoId'); } catch {}
+    }
+  }, [user, videos]);
+
+  // infinite scroll – append from pool
   useEffect(() => {
     const el = sliderRef.current;
     if (!el || allVideos.length === 0) return;
 
     const threshold = 3 * (el.clientHeight || window.innerHeight);
-
     const handleScrollDown = () => {
       const { scrollTop, scrollHeight, clientHeight } = el;
       if (scrollHeight - (scrollTop + clientHeight) < threshold) {
-        const newShuffled = [...allVideos].sort(() => Math.random() - 0.5);
-        setVideos(prev => [...prev, ...newShuffled]);
+        setVideos(prev => [...prev, ...allVideos]);
       }
     };
-
     el.addEventListener('scroll', handleScrollDown);
     return () => el.removeEventListener('scroll', handleScrollDown);
   }, [allVideos]);
 
-  // Infinite scroll up
+  // infinite scroll – prepend
   useEffect(() => {
     const el = sliderRef.current;
     if (!el || allVideos.length === 0) return;
 
     const threshold = 3 * (el.clientHeight || window.innerHeight);
-
     const handleScrollUp = () => {
       const { scrollTop, clientHeight } = el;
       if (scrollTop < threshold) {
-        const newShuffled = [...allVideos].sort(() => Math.random() - 0.5);
-        setVideos(prev => [...newShuffled, ...prev]);
-        const addedHeight = newShuffled.length * clientHeight;
+        setVideos(prev => [...allVideos, ...prev]);
+        const addedHeight = allVideos.length * clientHeight;
         el.scrollTop += addedHeight;
       }
     };
-
     el.addEventListener('scroll', handleScrollUp);
     return () => el.removeEventListener('scroll', handleScrollUp);
   }, [allVideos]);
@@ -245,12 +420,23 @@ export default function VideoFeed() {
 
   const handleDelete = async (videoId: string) => {
     if (!confirm('Are you sure you want to delete this upload?')) return;
+    // Delete from Firestore
     await deleteDoc(doc(db, 'videos', videoId));
     setVideos(prev => prev.filter(v => v.id !== videoId));
     setAllVideos(prev => prev.filter(v => v.id !== videoId));
+
+    // Also delete from Algolia (best-effort, via API route if you add it)
+    try {
+      await fetch('/api/algolia/deleteVideo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: videoId }),
+      });
+    } catch (e) {
+      console.warn('Algolia delete failed (will disappear on next reindex):', e);
+    }
   };
 
-  // NEW: compute current slide index from scrollTop
   const getCurrentIndex = (el: HTMLDivElement) => {
     const h = el.clientHeight || window.innerHeight;
     return Math.round(el.scrollTop / h);
@@ -261,11 +447,7 @@ export default function VideoFeed() {
     if (!el || videos.length === 0) return;
     const h = el.clientHeight || window.innerHeight;
     const idx = getCurrentIndex(el);
-    const next = idx + 1;
-    el.scrollTo({
-      top: next * h,
-      behavior: 'smooth',
-    });
+    el.scrollTo({ top: (idx + 1) * h, behavior: 'smooth' });
   };
 
   const scrollPrev = () => {
@@ -273,11 +455,7 @@ export default function VideoFeed() {
     if (!el || videos.length === 0) return;
     const h = el.clientHeight || window.innerHeight;
     const idx = getCurrentIndex(el);
-    const prev = idx - 1;
-    el.scrollTo({
-      top: prev * h,
-      behavior: 'smooth',
-    });
+    el.scrollTo({ top: (idx - 1) * h, behavior: 'smooth' });
   };
 
   const togglePlay = (e: React.MouseEvent<HTMLVideoElement>) => {
@@ -285,28 +463,86 @@ export default function VideoFeed() {
     v.paused ? v.play().catch(() => {}) : v.pause();
   };
 
-  // ✅ share handler
   const handleShare = (video: VideoDoc) => {
     const link = `${window.location.origin}/video/${video.id}`;
     navigator.clipboard.writeText(link).then(() => {
       alert('Link copied to clipboard!');
     }).catch(err => {
-     console.error("Failed to copy link: ", err);
-      alert('❌ Could not copy link');  
+      console.error("Failed to copy link: ", err);
+      alert('❌ Could not copy link');
     });
+  };
+
+  const openAuthModal = () => {
+    if (videos[currentIndex]) {
+      try { localStorage.setItem('lastVideoId', videos[currentIndex].id); } catch {}
+    }
+    setAuthDialogOpen(true);
+  };
+
+  // carousel helpers
+  const setMediaIndex = (postId: string, idx: number) =>
+    setMediaIndexMap(prev => ({ ...prev, [postId]: idx }));
+
+  // 🔎 trigger navigation to /search when user presses Enter
+  const triggerSearch = () => {
+    const q = searchTerm.trim();
+    if (!q) return;
+    router.push(`/search?q=${encodeURIComponent(q)}`);
   };
 
   return (
     <div className="relative h-screen w-full bg-black text-white overflow-hidden">
-      {/* Profile Button */}
-      <div className="absolute top-3 right-3 z-50">
+      {/* Top-right controls */}
+      <div className="absolute top-3 right-3 z-50 flex items-center space-x-2">
+        {/* Inline slide-out search */}
+        <div
+          className={`flex items-center transition-all duration-300 ${
+            searchOpen ? 'w-64 sm:w-80' : 'w-10'
+          }`}
+        >
+          {/* Search / close icon */}
+          <button
+            type="button"
+            onClick={() => {
+              const next = !searchOpen;
+              setSearchOpen(next);
+              if (!next) setSearchTerm('');
+            }}
+            className={`h-10 w-10 flex items-center justify-center rounded-full bg-gray-900/80 hover:bg-gray-800 transition ${
+              searchOpen ? 'rounded-r-none' : ''
+            }`}
+            aria-label={searchOpen ? 'Close search' : 'Open search'}
+          >
+            {searchOpen ? <FaTimes /> : <FaSearch />}
+          </button>
+
+          {/* Expanding input */}
+          {searchOpen && (
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  triggerSearch();
+                }
+              }}
+              placeholder="Search services…"
+              className="flex-1 bg-gray-900/90 text-white placeholder-gray-400 px-3 py-2 rounded-r-full outline-none text-sm"
+            />
+          )}
+        </div>
+
+        {/* Avatar / menu */}
         <div className="relative">
           <button onClick={() => setDropdownOpen(!dropdownOpen)} className="focus:outline-none">
             {user?.photoURL ? (
               <img src={user.photoURL} alt="profile" className="w-9 h-9 rounded-full object-cover border border-white/40" />
             ) : (
               <div className="w-9 h-9 bg-gray-400 rounded-full flex items-center justify-center">
-                <span className="text-white font-medium">U</span>
+                <span className="text.white font-medium">U</span>
               </div>
             )}
           </button>
@@ -328,21 +564,47 @@ export default function VideoFeed() {
 
                   {isProvider && (
                     <>
-                      <button onClick={() => { router.push('/upload'); setDropdownOpen(false); }} className="block w-full px-2 py-1 hover:bg-gray-700 rounded mb-1">
+                      <button
+                        onClick={() => { router.push('/upload'); setDropdownOpen(false); }}
+                        className="block w-full px-2 py-1 hover:bg-gray-700 rounded mb-1"
+                      >
                         Upload
                       </button>
-
-                      <button onClick={() => { router.push('/provider/dashboard'); setDropdownOpen(false); }} className="block w-full px-2 py-1 hover:bg-gray-700 rounded mb-1">
+                      <button
+                        onClick={() => { router.push('/provider/dashboard'); setDropdownOpen(false); }}
+                        className="block w-full px-2 py-1 hover:bg-gray-700 rounded mb-1"
+                      >
                         Provider Dashboard
+                      </button>
+
+                      <button
+                        onClick={() => { router.push('/creator/bookings'); setDropdownOpen(false); }}
+                        className="block w-full px-2 py-1 hover:bg-gray-700 rounded mb-1"
+                      >
+                        Client Bookings
+                      </button>
+                      <button
+                        onClick={() => { router.push('/bookings'); setDropdownOpen(false); }}
+                        className="block w-full px-2 py-1 hover:bg-gray-700 rounded mb-1"
+                      >
+                        My Bookings
                       </button>
                     </>
                   )}
 
-                  <button onClick={handleBookingsClick} className="block w-full px-2 py-1 hover:bg-gray-700 rounded mb-1">
-                    {isProvider ? 'Client Bookings' : 'My Bookings'}
-                  </button>
+                  {!isProvider && (
+                    <button
+                      onClick={() => { router.push('/bookings'); setDropdownOpen(false); }}
+                      className="block w-full px-2 py-1 hover:bg-gray-700 rounded mb-1"
+                    >
+                      My Bookings
+                    </button>
+                  )}
 
-                  <button onClick={() => { router.push('/profile'); setDropdownOpen(false); }} className="block w-full px-2 py-1 hover:bg-gray-700 rounded mb-1">
+                  <button
+                    onClick={() => { router.push('/profile'); setDropdownOpen(false); }}
+                    className="block w-full px-2 py-1 hover:bg-gray-700 rounded mb-1"
+                  >
                     Edit Profile
                   </button>
 
@@ -352,13 +614,13 @@ export default function VideoFeed() {
                   >
                     Messages
                   </button>
-                  
+
                   <button onClick={handleSignOut} className="block w-full px-2 py-1 hover:bg-gray-700 rounded text-red-400">
                     Sign Out
                   </button>
                 </>
               ) : (
-                <button onClick={() => setAuthDialogOpen(true)} className="block w-full px-2 py-1 hover:bg-gray-700 rounded">
+                <button onClick={openAuthModal} className="block w-full px-2 py-1 hover:bg-gray-700 rounded">
                   Sign In / Sign Up
                 </button>
               )}
@@ -378,26 +640,135 @@ export default function VideoFeed() {
           const followed = up && user ? followMap[v.userId!] : false;
           const isOwner = v.userId === user?.uid;
 
+          const displayedPrice =
+            typeof v.serviceCost === 'number' ? Math.round(v.serviceCost * 1.1) : null;
+
+          const media = getMediaList(v);
+          const hasCarousel = media.length > 1;
+          const activeIdx = mediaIndexMap[v.id] ?? 0;
+          const active = media[activeIdx] || media[0];
+
+          // Handles for this creator
+          const personalHandle = normalizeHandle(
+            up.personalUsername || up.username
+          );
+          const businessHandle = normalizeHandle(
+            up.businessUsername || personalHandle
+          );
+
+          // Pretty URL: /{businessHandle} for businesses, /u/{handle} for personal-only
+          const creatorUrl = businessHandle
+            ? `/${businessHandle}`
+            : personalHandle
+            ? `/u/${personalHandle}`
+            : v.userId
+            ? `/creator/${v.userId}`
+            : '/';
+
           return (
             <div key={`${v.id}-${i}`} className="relative h-screen flex items-center justify-center snap-start">
-              <video
-                src={v.url}
-                muted
-                loop
-                playsInline
-                onClick={togglePlay}
-                className="max-h-screen max-w-full object-contain z-40"
-              />
+              {/* Stack badge */}
+              {hasCarousel && (
+                <div className="absolute top-3 right-3 z-50">
+                  <div className="bg-black/70 text-white rounded-full p-2 flex items-center justify-center">
+                    <FaImages className="text-sm" />
+                  </div>
+                </div>
+              )}
 
-              {/* Username */}
+              {/* Media viewer with swipe handlers */}
               <div
-                onClick={() => v.userId && router.push(`/creator/${v.userId}`)}
-                className="absolute top-3 left-3 bg-black/70 px-1 py-0.5 rounded-md cursor-pointer hover:bg-black/90 transition text-xs font-semibold text-white z-50"
+                className="relative max-h-screen max-w-full z-40"
+                onTouchStart={(e) => {
+                  const t = e.touches[0];
+                  touchStartXRef.current[v.id] = t.clientX;
+                  touchStartYRef.current[v.id] = t.clientY;
+                }}
+                onTouchEnd={(e) => {
+                  const startX = touchStartXRef.current[v.id];
+                  const startY = touchStartYRef.current[v.id];
+                  const t = e.changedTouches[0];
+                  const dx = t.clientX - (startX ?? t.clientX);
+                  const dy = t.clientY - (startY ?? t.clientY);
+                  const THRESH_X = 40;
+                  if (Math.abs(dx) > THRESH_X && Math.abs(dx) > Math.abs(dy)) {
+                    if (dx < 0) {
+                      setMediaIndex(v.id, (activeIdx + 1) % media.length);
+                    } else {
+                      setMediaIndex(v.id, (activeIdx - 1 + media.length) % media.length);
+                    }
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }
+                  delete touchStartXRef.current[v.id];
+                  delete touchStartYRef.current[v.id];
+                }}
               >
-                {up.businessName ? up.businessName : `@${up.username || 'unknown'}`}
+                {active?.type === 'image' || (active && isImageUrl(active.url)) ? (
+                  <img
+                    src={active.url}
+                    alt={v.title || 'service image'}
+                    className="max-h-screen max-w-full object-contain select-none"
+                    draggable={false}
+                  />
+                ) : (
+                  <video
+                    key={active?.url}
+                    src={active?.url}
+                    muted
+                    loop
+                    playsInline
+                    onClick={togglePlay}
+                    className="max-h-screen max-w-full object-contain"
+                  />
+                )}
               </div>
 
-              {/* Action Buttons */}
+              {/* Carousel arrows */}
+              {hasCarousel && (
+                <>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setMediaIndex(v.id, (activeIdx - 1 + media.length) % media.length); }}
+                    className="absolute left-3 top-1/2 -translate-y-1/2 z-50 bg-white/70 hover:bg.white text-black rounded-full p-2"
+                    aria-label="Previous"
+                  >
+                    <FaChevronLeft />
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setMediaIndex(v.id, (activeIdx + 1) % media.length); }}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 z-50 bg-white/70 hover:bg.white text-black rounded-full p-2"
+                    aria-label="Next"
+                  >
+                    <FaChevronRight />
+                  </button>
+
+                  {/* Dots indicator */}
+                  <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-50 flex space-x-1">
+                    {media.map((_, idx) => (
+                      <span
+                        key={idx}
+                        className={`h-2 w-2 rounded-full ${idx === activeIdx ? 'bg-white' : 'bg-white/40'}`}
+                      />
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {/* Creator pill */}
+              <div
+                onClick={() => router.push(creatorUrl)}
+                className="absolute top-3 left-3 bg-black/70 px-1 py-0.5 rounded-md cursor-pointer hover:bg-black/90 transition text-xs font-semibold text-white z-50"
+              >
+                {up.businessName
+                  ? up.businessName
+                  : businessHandle
+                  ? `@${businessHandle}`
+                  : personalHandle
+                  ? `@${personalHandle}`
+                  : '@unknown'}
+              </div>
+
+              {/* Actions */}
               <div className="absolute bottom-3 right-3 flex flex-col items-center space-y-2 z-50">
                 <button onClick={() => handleLike(v.id)} className="text-xl">
                   {liked ? <FaHeart className="text-red-500" /> : <FaRegHeart />}
@@ -413,12 +784,12 @@ export default function VideoFeed() {
                     {followed ? <FaUserCheck /> : <FaUserPlus />}
                   </button>
                 )}
-                <button onClick={() => setBookingVideo(v)} className="bg-green-500 hover:bg-green-600 text-white px-2 py-1 rounded text-xs">
+                <button onClick={() => setBookingVideo(v)} className="bg-green-500 hover:bg-green-600 text.white px-2 py-1 rounded text-xs">
                   Book Service
                 </button>
               </div>
 
-              {/* Owner Edit/Delete */}
+              {/* Owner controls */}
               {isOwner && (
                 <div className="absolute top-16 right-3 flex flex-col space-y-1 z-50">
                   <button onClick={() => setEditingVideo(v)} className="bg-yellow-500 hover:bg-yellow-600 text-white text-xs px-2 py-1 rounded">
@@ -430,11 +801,18 @@ export default function VideoFeed() {
                 </div>
               )}
 
-              {/* Title & Description */}
-              {(v.title || v.description) && (
+              {/* Text + Price */}
+              {(v.title || v.description || displayedPrice !== null) && (
                 <div className="absolute bottom-3 left-3 max-w-[60%] text-shadow overflow-hidden text-ellipsis z-50">
                   {v.title && <h3 className="text-sm font-bold text-white">{v.title}</h3>}
                   {v.description && <p className="text-xs text-gray-200">{v.description}</p>}
+                  {displayedPrice !== null && (
+                    <div className="mt-2">
+                      <span className="inline-block bg-white/90 text-black text-xs font-bold px-2 py-1 rounded">
+                        KSHS {displayedPrice.toLocaleString()}
+                      </span>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -442,7 +820,6 @@ export default function VideoFeed() {
         })}
       </div>
 
-      {/* Scroll Buttons */}
       {isSliderReady && sliderInstanceRef.current && (
         <div className="absolute right-3 top-1/2 transform -translate-y-1/2 hidden sm:flex flex-col space-y-2 z-50">
           <button onClick={scrollPrev} className="bg-white/20 hover:bg-white/40 p-1 rounded-full text-white">

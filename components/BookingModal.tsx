@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import Calendar from "react-calendar";
 import "react-calendar/dist/Calendar.css";
 import { auth, db } from "../lib/firebase";
@@ -20,7 +20,6 @@ import { onAuthStateChanged } from "firebase/auth";
 import { useRouter } from "next/navigation";
 import AuthModal from "./AuthModal";
 
-// Optional: send logs to /api/log (ok if 404)
 async function serverLog(data: any) {
   try {
     await fetch("/api/log", {
@@ -33,17 +32,14 @@ async function serverLog(data: any) {
 
 interface Addon {
   name: string;
-  cost: number; // provider's base
+  cost: number;
   unit: string;
 }
-
 interface VideoDoc {
   id?: string;
   userId?: string;
-
   serviceCost?: number;
   addons?: Addon[];
-
   specialInstructions?: string | null;
   serviceIncludes?: string[];
   notProvided?: string[];
@@ -62,21 +58,118 @@ type ConfirmedInfo = {
   time: string;
   total: number;
   serviceTitle?: string;
+  completionPin?: string; // 🔐 PIN for service completion verification
 };
+
+/* ---------- Provider schedule helpers ---------- */
+type DayMinutes = { start: number; end: number };
+type ScheduleMap = Partial<Record<number, DayMinutes>>;
+
+function hhmmToMin(hhmm: string): number {
+  const [h, m] = hhmm.split(":").map((x) => parseInt(x, 10));
+  return (h || 0) * 60 + (m || 0);
+}
+function minToHhmm(min: number): string {
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+function normalizeScheduleFromProfile(profile: any | null): ScheduleMap {
+  const out: ScheduleMap = {};
+  if (!profile) {
+    for (let d of [1, 2, 3, 4, 5, 6]) out[d] = { start: 9 * 60, end: 17 * 60 };
+    return out;
+  }
+  if (profile?.businessHours && typeof profile.businessHours === "object") {
+    const obj = profile.businessHours;
+    Object.keys(obj).forEach((key) => {
+      const di = Number(key);
+      const dayIdx = di === 7 ? 0 : di;
+      out[dayIdx] = {
+        start: hhmmToMin(obj[key]?.start || "09:00"),
+        end: hhmmToMin(obj[key]?.end || "17:00"),
+      };
+    });
+    return out;
+  }
+  if (
+    Array.isArray(profile?.operatingDays) &&
+    profile?.openTime &&
+    profile?.closeTime
+  ) {
+    const start = hhmmToMin(profile.openTime);
+    const end = hhmmToMin(profile.closeTime);
+    (profile.operatingDays as number[]).forEach(
+      (d) => (out[d] = { start, end }),
+    );
+    return out;
+  }
+  if (profile?.hours && typeof profile.hours === "object") {
+    const map: Record<string, number> = {
+      sun: 0,
+      mon: 1,
+      tue: 2,
+      wed: 3,
+      thu: 4,
+      fri: 5,
+      sat: 6,
+    };
+    Object.keys(map).forEach((k) => {
+      if (profile.hours[k]) {
+        out[map[k]] = {
+          start: hhmmToMin(profile.hours[k].start || "09:00"),
+          end: hhmmToMin(profile.hours[k].end || "17:00"),
+        };
+      }
+    });
+    return out;
+  }
+  for (let d of [1, 2, 3, 4, 5, 6]) out[d] = { start: 9 * 60, end: 17 * 60 };
+  return out;
+}
+function generateSlotsForDate(
+  date: Date,
+  schedule: ScheduleMap,
+  stepMinutes = 60,
+): string[] {
+  const dayIdx = date.getDay();
+  const window = schedule[dayIdx];
+  if (!window) return [];
+  const out: string[] = [];
+  for (let t = window.start; t < window.end; t += stepMinutes)
+    out.push(minToHhmm(t));
+  return out;
+}
+function isPastDay(d: Date): boolean {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const cmp = new Date(d);
+  cmp.setHours(0, 0, 0, 0);
+  return cmp.getTime() < today.getTime();
+}
+function isTimeInPastToday(hhmm: string): boolean {
+  const now = new Date();
+  const [hh, mm] = hhmm.split(":").map((x) => parseInt(x, 10));
+  const slotDate = new Date();
+  slotDate.setHours(hh, mm, 0, 0);
+  return slotDate.getTime() <= now.getTime();
+}
+/* ---------------------------------------------- */
 
 export default function BookingModal({ video, onClose }: BookingModalProps) {
   const router = useRouter();
   const [user] = useAuthState(auth);
 
   const [authOpen, setAuthOpen] = useState(false);
-
   const [profileComplete, setProfileComplete] = useState(false);
-  const [step, setStep] = useState<1 | 2 | 3>(1); // 3 = confirmation screen
+  const [step, setStep] = useState<1 | 2 | 3>(1);
+
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [selectedTime, setSelectedTime] = useState<string>("");
-  const [addonSelections, setAddonSelections] = useState<Record<string, number>>(
-    {}
-  );
+
+  const [addonSelections, setAddonSelections] = useState<
+    Record<string, number>
+  >({});
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<
@@ -87,33 +180,30 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
   const [loading, setLoading] = useState(false);
 
   const [confirmed, setConfirmed] = useState<ConfirmedInfo | null>(null);
-
-  // Track booking ids for both flows
-  const [lastBookingId, setLastBookingId] = useState<string | null>(null);
   const [lastShortId, setLastShortId] = useState<string | null>(null);
 
-  // M-Pesa waiting state and listener
   const [mpesaPending, setMpesaPending] = useState(false);
   const bookingUnsubRef = useRef<Unsubscribe | null>(null);
 
-  // -------------------------------
-  // Pricing (no markup disclosure in UI)
-  // -------------------------------
-  const markupRate = 0.1; // internal math only
+  const [providerSchedule, setProviderSchedule] = useState<ScheduleMap>({});
+
+  // 🔐 holds the completion PIN from backend for this booking
+  const [completionPin, setCompletionPin] = useState<string | null>(null);
+
+  // Pricing
+  const markupRate = 0.1;
   const base = video.serviceCost || 0;
   const addons = video.addons || [];
   const withMarkup = (n: number) => Math.round(n * (1 + markupRate));
-
   const addonsRawTotal = Object.entries(addonSelections).reduce(
     (sum, [n, qty]) => {
       const addon = addons.find((a) => a.name === n);
       return sum + (addon ? addon.cost * qty : 0);
     },
-    0
+    0,
   );
   const subtotalRaw = base + addonsRawTotal;
   const totalWithMarkup = withMarkup(subtotalRaw);
-
   const baseForDisplay = withMarkup(base);
   const extrasForDisplay = withMarkup(addonsRawTotal);
 
@@ -121,11 +211,9 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
   const includes = video.serviceIncludes || [];
   const notProvided = video.notProvided || [];
 
-  // 🔹 Keep the component aware of auth transitions (so we can reopen the booking flow)
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (u) => {
       if (u) {
-        // user just signed in — close auth modal and load profile basics
         setAuthOpen(false);
         const snap = await getDoc(doc(db, "users", u.uid));
         if (snap.exists()) {
@@ -135,36 +223,43 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
           setName(d.fullName || "");
           setPhone(d.phone || "");
           setMpesaPhone(d.phone || "");
-          // push back to step 1 (continue booking)
           setStep(1);
         } else {
-          // no profile doc yet
           setProfileComplete(false);
           setStep(1);
         }
       } else {
-        // signed out
         setProfileComplete(false);
       }
     });
     return () => unsub();
   }, []);
 
-  // 🔹 Fetch profile (for already-logged-in users)
   useEffect(() => {
     if (!user) return;
     getDoc(doc(db, "users", user.uid)).then((snap) => {
-      if (snap.exists()) {
-        const d = snap.data() as any;
-        setProfileComplete(!!d.fullName && !!d.phone);
-        setName(d.fullName || "");
-        setPhone(d.phone || "");
-        setMpesaPhone(d.phone || "");
-      }
+      if (!snap.exists()) return;
+      const d = snap.data() as any;
+      setProfileComplete(!!d.fullName && !!d.phone);
+      setName(d.fullName || "");
+      setPhone(d.phone || "");
+      setMpesaPhone(d.phone || "");
     });
   }, [user]);
 
-  // 🔹 Fetch booked times
+  useEffect(() => {
+    (async () => {
+      if (!video?.userId) return;
+      try {
+        const ps = await getDoc(doc(db, "users", video.userId));
+        const prof = ps.exists() ? (ps.data() as any) : null;
+        setProviderSchedule(normalizeScheduleFromProfile(prof));
+      } catch {
+        setProviderSchedule(normalizeScheduleFromProfile(null));
+      }
+    })();
+  }, [video?.userId]);
+
   useEffect(() => {
     if (!video?.userId || !selectedDate) return;
     const dateStr = selectedDate.toISOString().split("T")[0];
@@ -181,7 +276,6 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
   }, [video?.userId, selectedDate]);
 
   useEffect(() => {
-    // cleanup any active booking listener on unmount
     return () => {
       if (bookingUnsubRef.current) {
         bookingUnsubRef.current();
@@ -191,13 +285,8 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
   }, []);
 
   const handleProfileSave = async () => {
-    if (!user) {
-      // Shouldn't happen (we don't show this form if not logged in), but just in case:
-      alert("You must be signed in");
-      return;
-    }
+    if (!user) return alert("You must be signed in");
     if (!name.trim() || !phone) return alert("Name & phone required");
-
     await updateDoc(doc(db, "users", user.uid), {
       fullName: name.trim(),
       phone,
@@ -206,9 +295,7 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
   };
 
   function normalizeKeMpesaPhone(raw: string) {
-    let p = (raw || "").trim();
-    if (!p) throw new Error("Please enter phone number");
-    p = p.replace(/\s+/g, "");
+    let p = (raw || "").trim().replace(/\s+/g, "");
     if (p.startsWith("+")) p = p.slice(1);
     if (p.startsWith("0")) p = `254${p.slice(1)}`;
     else if (p.startsWith("7")) p = `254${p}`;
@@ -223,19 +310,15 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
     if (!video?.userId) return;
     const q = collection(db, `availability/${video.userId}/slots`);
     const snap = await getDocs(q);
+    const dateStr = selectedDate.toISOString().split("T")[0];
     const times: string[] = [];
     snap.forEach((docSnap) => {
       const data = docSnap.data();
-      if (
-        data.date === selectedDate.toISOString().split("T")[0] &&
-        data.booked
-      )
-        times.push(data.time);
+      if (data.date === dateStr && data.booked) times.push(data.time);
     });
     setBookedTimes(times);
   };
 
-  // UI controls for extras
   const incAddon = (name: string) =>
     setAddonSelections((p) => ({ ...p, [name]: (p[name] || 0) + 1 }));
   const decAddon = (name: string) =>
@@ -245,62 +328,44 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
       return next;
     });
 
-  // Start listening to a booking document and transition to confirmation once confirmed
   const waitForBookingConfirmation = (bookingId: string, dateISO: string) => {
     if (bookingUnsubRef.current) {
       bookingUnsubRef.current();
       bookingUnsubRef.current = null;
     }
-
     const ref = doc(db, "bookings", bookingId);
-    bookingUnsubRef.current = onSnapshot(
-      ref,
-      (snap) => {
-        if (!snap.exists()) return;
-        const data = snap.data() as any;
-        const status = (data.status || "").toLowerCase();
-        if (status === "confirmed" || status === "completed") {
-          if (bookingUnsubRef.current) {
-            bookingUnsubRef.current();
-            bookingUnsubRef.current = null;
-          }
-          setMpesaPending(false);
-
-          setConfirmed({
-            bookingId,
-            shortId: data.shortId || lastShortId || undefined,
-            ref: data.paymentRef || undefined,
-            dateISO,
-            time: data.time || selectedTime,
-            total: data.total || totalWithMarkup,
-            serviceTitle: undefined,
-          });
-          setStep(3);
+    bookingUnsubRef.current = onSnapshot(ref, (snap) => {
+      if (!snap.exists()) return;
+      const data = snap.data() as any;
+      const status = (data.status || "").toLowerCase();
+      if (status === "confirmed" || status === "completed") {
+        if (bookingUnsubRef.current) {
+          bookingUnsubRef.current();
+          bookingUnsubRef.current = null;
         }
-      },
-      (err) => {
-        console.error("booking onSnapshot error", err);
+        setMpesaPending(false);
+        setConfirmed({
+          bookingId,
+          shortId: data.shortId || lastShortId || undefined,
+          ref: data.paymentRef || undefined,
+          dateISO,
+          time: data.time || selectedTime,
+          total: data.total || totalWithMarkup,
+          serviceTitle: undefined,
+          completionPin: completionPin || undefined, // 🔐 we only know it from initial save
+        });
+        setStep(3);
       }
-    );
+    });
   };
 
-  // 🔹 Payment handler
   const handlePay = async () => {
     if (!user) {
       setAuthOpen(true);
       return;
     }
-    if (!profileComplete) {
-      alert("Please complete your profile");
-      return;
-    }
+    if (!profileComplete) return alert("Please complete your profile");
     if (!paymentMethod) return alert("Select a payment method");
-
-    const safeLog = async (payload: any) => {
-      try {
-        await serverLog(payload);
-      } catch {}
-    };
 
     try {
       setLoading(true);
@@ -312,37 +377,31 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
         videoId: video.id || "",
         date: dateISO,
         time: selectedTime,
-
-        subtotal: Math.round(subtotalRaw * 100) / 100, // internal
+        subtotal: Math.round(subtotalRaw * 100) / 100,
         total: totalWithMarkup,
-        markupRate, // internal only
+        markupRate,
         markupAmount: totalWithMarkup - Math.round(subtotalRaw),
-
         addons: addonSelections,
       };
 
-      // Save booking and capture both IDs (docId + shortId)
       const saveRes = await fetch("/api/save-booking", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(bookingData),
       });
       const saveData = await saveRes.json();
-      if (!saveRes.ok) throw new Error(saveData.error || "Failed to save booking");
+      if (!saveRes.ok)
+        throw new Error(saveData.error || "Failed to save booking");
       const bookingId: string = saveData.bookingId;
       const shortId: string | undefined = saveData.shortId;
-
-      setLastBookingId(bookingId);
       setLastShortId(shortId || null);
 
-      // ✅ PAYSTACK
-      if (paymentMethod === "paystack") {
-        await safeLog({
-          step: "startPaystack",
-          total: totalWithMarkup,
-          bookingId,
-        });
+      // 🔐 capture completion PIN once from backend
+      if (saveData.completionPin) {
+        setCompletionPin(saveData.completionPin);
+      }
 
+      if (paymentMethod === "paystack") {
         const ensurePaystackReady = () =>
           new Promise<void>((resolve, reject) => {
             if ((window as any).PaystackPop?.setup) return resolve();
@@ -360,11 +419,8 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
             s.onerror = () => reject(new Error("Failed to load Paystack"));
             document.body.appendChild(s);
           });
-
         await ensurePaystackReady();
-        await safeLog({ step: "paystackLoaded" });
 
-        // Initialize reference on server
         const initRes = await fetch("/api/paystack/init", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -375,19 +431,18 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
           }),
         });
         const initData = await initRes.json();
-        if (!initRes.ok || !initData?.reference) {
+        if (!initRes.ok || !initData?.reference)
           throw new Error(initData?.error || "Payment init failed");
-        }
 
         const PaystackLib = (window as any).PaystackPop;
-        const publicKey = process.env.NEXT_PUBLIC_PAYSTACK_KEY;
-        if (!PaystackLib?.setup || !publicKey) {
-          throw new Error("Paystack configuration missing");
-        }
-
-        const onCallback = (response: any) => {
-          (async () => {
-            await safeLog({ event: "paystackSuccess", response });
+        const handler = PaystackLib.setup({
+          key: process.env.NEXT_PUBLIC_PAYSTACK_KEY!,
+          email: user?.email || "noemail@vextup.com",
+          amount: Math.round(totalWithMarkup * 100),
+          currency: "KES",
+          ref: initData.reference,
+          metadata: { bookingId },
+          callback: async (response: any) => {
             await fetch("/api/confirm-booking", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -398,53 +453,28 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
               }),
             });
             await refreshBookedTimes();
-
-            // Transition to confirmation view (shortId included)
             setConfirmed({
               bookingId,
-              shortId: shortId || undefined,
+              shortId,
               ref: response.reference,
               dateISO,
               time: selectedTime,
               total: totalWithMarkup,
-              serviceTitle: undefined,
+              completionPin:
+                saveData.completionPin || completionPin || undefined, // 🔐 show PIN on success
             });
             setStep(3);
-          })().catch((e) => {
-            console.error("Callback post-processing failed:", e);
-            alert("Payment succeeded but post-processing failed. Please refresh.");
-          });
-        };
-
-        const onClose = () => {
-          // user closed the iframe
-        };
-
-        const handler = PaystackLib.setup({
-          key: publicKey,
-          email: user?.email || "noemail@vextup.com",
-          amount: Math.round(totalWithMarkup * 100), // minor units
-          currency: "KES",
-          ref: initData.reference,
-          metadata: { bookingId },
-          callback: onCallback,
-          onClose,
+          },
+          onClose: () => {},
         });
-
-        await safeLog({ step: "openIframe", ref: initData.reference });
         handler.openIframe();
       }
 
-      // ✅ M-PESA
       if (paymentMethod === "mpesa") {
         if (!mpesaPhone.trim())
           return alert("Please enter the M-Pesa number to charge");
         const msisdn = normalizeKeMpesaPhone(mpesaPhone);
-        await safeLog({ step: "mpesaStart", msisdn, total: totalWithMarkup, bookingId });
-
-        // Start waiting overlay *before* calling init
         setMpesaPending(true);
-
         const mpesaRes = await fetch("/api/mpesa/init", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -454,11 +484,7 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
             bookingId,
           }),
         });
-
-        const respText = await mpesaRes.text();
-        await safeLog({ step: "mpesaResponse", raw: respText, bookingId });
-
-        // Start listening for booking confirmation in Firestore
+        await mpesaRes.text();
         waitForBookingConfirmation(bookingId, dateISO);
       }
     } catch (err: any) {
@@ -470,27 +496,53 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
     }
   };
 
-  const availableTimes = [
-    "09:00",
-    "10:00",
-    "11:00",
-    "12:00",
-    "13:00",
-    "14:00",
-    "15:00",
-    "16:00",
-    "17:00",
-  ];
+  // Derived slots
+  const candidateSlots = useMemo(
+    () => generateSlotsForDate(selectedDate, providerSchedule, 60),
+    [selectedDate, providerSchedule],
+  );
 
-  // ---------- Render ----------
+  const tileDisabled = ({ date, view }: { date: Date; view: string }) => {
+    if (view !== "month") return false;
+    if (isPastDay(date)) return true;
+    const slots = generateSlotsForDate(date, providerSchedule, 60);
+    if (slots.length === 0) return true;
+
+    const isToday = date.toDateString() === new Date().toDateString();
+    const effective = isToday
+      ? slots.filter((t) => !isTimeInPastToday(t))
+      : slots;
+    if (effective.length === 0) return true;
+
+    // Fully-booked indicator only for selected day (we know its bookedTimes)
+    const selectedISO = selectedDate.toISOString().split("T")[0];
+    const thisISO = date.toISOString().split("T")[0];
+    if (thisISO === selectedISO) {
+      if (bookedTimes.length >= effective.length) return true;
+    }
+    return false;
+  };
+
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
       <div className="bg-white text-black rounded-lg p-6 w-[90vw] max-w-md shadow-lg relative">
-        <button onClick={onClose} className="text-xl absolute top-4 right-4">
+        <button
+          onClick={onClose}
+          className="text-xl absolute top-4 right-4"
+          aria-label="Close"
+        >
           ×
         </button>
 
-        {/* 🔒 If not signed in: show sign-in prompt rather than profile form */}
+        {/* Logo */}
+        <div className="flex justify-center mb-4">
+          <img
+            src="/vextup-logo.png"
+            alt="VEXTUP"
+            className="h-20 w-auto object-contain"
+          />
+        </div>
+
         {!user ? (
           <div className="text-center p-2">
             <h2 className="text-lg font-bold mb-2">Sign in to Book</h2>
@@ -499,11 +551,10 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
             </p>
             <button
               onClick={() => setAuthOpen(true)}
-              className="px-4 py-2 rounded bg-blue-600 text-white"
+              className="px-4 py-2 rounded bg-[#0F7A5F] hover:bg-[#0b644e] text-white"
             >
               Sign In / Sign Up
             </button>
-
             {authOpen && (
               <AuthModal
                 open={authOpen}
@@ -513,8 +564,7 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
           </div>
         ) : (
           <>
-            {/* STEP 3: Confirmation */}
-            {step === 3 && confirmed && (
+            {step === 3 && confirmed ? (
               <div className="text-center">
                 <div className="mx-auto mb-4 w-14 h-14 rounded-full bg-green-100 flex items-center justify-center">
                   <span className="text-2xl">✅</span>
@@ -545,7 +595,24 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
                   <p>
                     <strong>Total Paid:</strong> KSHS {confirmed.total}
                   </p>
+                  {confirmed.completionPin && (
+                    <p className="mt-2">
+                      <strong>Service Release PIN:</strong>{" "}
+                      <span className="font-mono tracking-widest">
+                        {confirmed.completionPin}
+                      </span>
+                    </p>
+                  )}
                 </div>
+
+                {confirmed.completionPin && (
+                  <p className="text-xs text-gray-500 mb-4">
+                    Share this PIN with your provider{" "}
+                    <span className="font-semibold">only after</span> you are
+                    satisfied the service has been delivered. They will use it
+                    to confirm delivery and release funds.
+                  </p>
+                )}
 
                 <div className="flex gap-2 justify-center">
                   <button
@@ -553,7 +620,7 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
                       onClose();
                       router.push("/bookings");
                     }}
-                    className="px-4 py-2 rounded bg-blue-600 text-white"
+                    className="px-4 py-2 rounded bg-[#0F7A5F] hover:bg-[#0b644e] text-white"
                   >
                     View My Bookings
                   </button>
@@ -565,10 +632,7 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
                   </button>
                 </div>
               </div>
-            )}
-
-            {/* STEP 1 & 2 (only when logged in) */}
-            {step !== 3 && (
+            ) : (
               <>
                 {!profileComplete ? (
                   <>
@@ -591,7 +655,7 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
                     />
                     <button
                       onClick={handleProfileSave}
-                      className="w-full bg-blue-600 text-white py-2 rounded"
+                      className="w-full bg-[#0F7A5F] hover:bg-[#0b644e] text-white py-2 rounded"
                     >
                       Save & Continue
                     </button>
@@ -600,9 +664,8 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
                   <>
                     <h2 className="text-lg font-bold mb-3">Book Service</h2>
 
-                    {/* Service details (optional) */}
                     {specialInstructions ? (
-                      <div className="mb-3 p-3 rounded bg-yellow-50 border border-yellow-200 text-sm">
+                      <div className="mb-3 p-3 rounded bg-emerald-50 border border-emerald-100 text-sm">
                         <div className="font-semibold mb-1">
                           Special instructions
                         </div>
@@ -622,7 +685,6 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
                         </ul>
                       </div>
                     )}
-
                     {notProvided.length > 0 && (
                       <div className="mb-3 p-3 rounded bg-gray-50 border text-sm">
                         <div className="font-semibold mb-1">Not provided</div>
@@ -634,61 +696,16 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
                       </div>
                     )}
 
-                    {/* Extras */}
-                    {addons.length > 0 && (
-                      <div className="mb-4 p-3 rounded bg-white border text-sm">
-                        <div className="font-semibold mb-2">Extras</div>
-                        <div className="space-y-2">
-                          {addons.map((a) => {
-                            const qty = addonSelections[a.name] || 0;
-                            const unitPriceCustomer = withMarkup(a.cost);
-                            const lineTotal = unitPriceCustomer * qty;
-                            return (
-                              <div
-                                key={a.name}
-                                className="flex items-center justify-between"
-                              >
-                                <div className="min-w-0 pr-2">
-                                  <div className="font-medium truncate">
-                                    {a.name}
-                                  </div>
-                                  <div className="text-xs text-gray-600">
-                                    {a.unit} • KSHS {unitPriceCustomer}
-                                  </div>
-                                </div>
-
-                                <div className="flex items-center space-x-2">
-                                  <button
-                                    type="button"
-                                    onClick={() => decAddon(a.name)}
-                                    className="px-2 py-1 rounded border"
-                                  >
-                                    −
-                                  </button>
-                                  <span className="w-6 text-center">{qty}</span>
-                                  <button
-                                    type="button"
-                                    onClick={() => incAddon(a.name)}
-                                    className="px-2 py-1 rounded border"
-                                  >
-                                    +
-                                  </button>
-                                  <div className="w-20 text-right tabular-nums">
-                                    {qty > 0 ? `KSHS ${lineTotal}` : ""}
-                                  </div>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
-
                     {/* Date & time */}
                     <Calendar
-                      onChange={(d) => setSelectedDate(d as Date)}
+                      onChange={(d) => {
+                        setSelectedDate(d as Date);
+                        setSelectedTime("");
+                      }}
                       value={selectedDate}
+                      tileDisabled={tileDisabled}
                     />
+
                     <label className="mt-4 block">Select Time:</label>
                     <select
                       className="w-full border rounded px-2 py-1"
@@ -696,28 +713,25 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
                       onChange={(e) => setSelectedTime(e.target.value)}
                     >
                       <option value="">-- time --</option>
-                      {[
-                        "09:00",
-                        "10:00",
-                        "11:00",
-                        "12:00",
-                        "13:00",
-                        "14:00",
-                        "15:00",
-                        "16:00",
-                        "17:00",
-                      ].map((t) => (
-                        <option
-                          key={t}
-                          value={t}
-                          disabled={bookedTimes.includes(t)}
-                        >
-                          {t} {bookedTimes.includes(t) ? " (Booked)" : ""}
-                        </option>
-                      ))}
+                      {candidateSlots.length === 0 && (
+                        <option disabled>Closed</option>
+                      )}
+                      {candidateSlots.map((t) => {
+                        const isBooked = bookedTimes.includes(t);
+                        const isPast =
+                          selectedDate.toDateString() ===
+                            new Date().toDateString() &&
+                          isTimeInPastToday(t);
+                        const disabled = isBooked || isPast;
+                        return (
+                          <option key={t} value={t} disabled={disabled}>
+                            {t} {isBooked ? "(Booked)" : ""}
+                          </option>
+                        );
+                      })}
                     </select>
 
-                    {/* Price summary (no markup disclosure) */}
+                    {/* Price summary */}
                     <div className="mt-4 text-sm bg-gray-50 border rounded p-3">
                       <div className="flex justify-between">
                         <span>Base</span>
@@ -744,7 +758,7 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
                     <button
                       onClick={() => setStep(2)}
                       disabled={!selectedTime}
-                      className="mt-4 w-full bg-green-600 text-white py-2 rounded disabled:bg-gray-400"
+                      className="mt-4 w-full bg-[#0F7A5F] hover:bg-[#0b644e] text-white py-2 rounded disabled:bg-gray-400"
                     >
                       Continue
                     </button>
@@ -761,7 +775,9 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
                     <select
                       className="w-full border rounded px-2 py-1 mt-2"
                       value={paymentMethod}
-                      onChange={(e) => setPaymentMethod(e.target.value as any)}
+                      onChange={(e) =>
+                        setPaymentMethod(e.target.value as any)
+                      }
                       disabled={mpesaPending}
                     >
                       <option value="">-- choose --</option>
@@ -791,14 +807,13 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
                     <button
                       onClick={handlePay}
                       disabled={loading || mpesaPending}
-                      className="mt-4 w-full bg-blue-600 text-white py-2 rounded disabled:bg-gray-400"
+                      className="mt-4 w-full bg-[#0F7A5F] hover:bg-[#0b644e] text-white py-2 rounded disabled:bg-gray-400"
                     >
                       {loading ? "Processing..." : "Proceed to Pay"}
                     </button>
 
-                    {/* M-Pesa waiting overlay */}
                     {mpesaPending && (
-                      <div className="mt-4 p-3 rounded bg-blue-50 border border-blue-200 text-sm">
+                      <div className="mt-4 p-3 rounded bg-emerald-50 border border-emerald-200 text-sm">
                         <div className="font-semibold mb-1">
                           Waiting for M-Pesa confirmation…
                         </div>
@@ -816,7 +831,6 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
         )}
       </div>
 
-      {/* Auth modal lives alongside (for not-logged-in path) */}
       {authOpen && (
         <AuthModal open={authOpen} onClose={() => setAuthOpen(false)} />
       )}
