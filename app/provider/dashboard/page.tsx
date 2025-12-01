@@ -1,8 +1,8 @@
-"use client";
+'use client';
 
-import { useState, useEffect, useMemo } from "react";
-import { auth, db } from "@/lib/firebase";
-import { useAuthState } from "react-firebase-hooks/auth";
+import { useState, useEffect, useMemo } from 'react';
+import { auth, db } from '@/lib/firebase';
+import { useAuthState } from 'react-firebase-hooks/auth';
 import {
   collection,
   query,
@@ -11,16 +11,16 @@ import {
   doc,
   getDoc,
   getDocs,
-} from "firebase/firestore";
+} from 'firebase/firestore';
 import {
   motion,
   AnimatePresence,
   useMotionValue,
   useTransform,
-} from "framer-motion";
-import WithdrawModal from "@/components/WithdrawModal";
-import WithdrawalHistory from "@/components/WithdrawalHistory";
-import PayoutSettingsModal from "@/components/PayoutSettingsModal";
+} from 'framer-motion';
+import WithdrawModal from '@/components/WithdrawModal';
+import WithdrawalHistory from '@/components/WithdrawalHistory';
+import PayoutSettingsModal from '@/components/PayoutSettingsModal';
 
 type BookingSummary = {
   total: number;
@@ -49,7 +49,7 @@ export default function ProviderDashboard() {
   const [user] = useAuthState(auth);
 
   // ----- UI tabs -----
-  const [activeTab, setActiveTab] = useState<"wallet" | "stats">("wallet");
+  const [activeTab, setActiveTab] = useState<'wallet' | 'stats'>('wallet');
 
   // ----- wallet state -----
   const [loading, setLoading] = useState(true);
@@ -80,6 +80,7 @@ export default function ProviderDashboard() {
   const [followersCount, setFollowersCount] = useState<number | null>(null);
   const [videoStats, setVideoStats] = useState<VideoStat[]>([]);
   const [loyalClients, setLoyalClients] = useState<ClientStat[]>([]);
+  const [lostRevenue, setLostRevenue] = useState(0); // NEW – refunded/lost value
 
   const mostBookedServices = useMemo(
     () =>
@@ -104,12 +105,12 @@ export default function ProviderDashboard() {
   // ✅ Check payout settings
   useEffect(() => {
     if (!user) return;
-    const userRef = doc(db, "users", user.uid);
+    const userRef = doc(db, 'users', user.uid);
 
     getDoc(userRef).then((snap) => {
       if (snap.exists()) {
         const data = snap.data() as any;
-        if (data.payout_method === "mpesa" && data.payout_phone) {
+        if (data.payout_method === 'mpesa' && data.payout_phone) {
           setHasPayoutSettings(true);
         } else {
           setHasPayoutSettings(false);
@@ -142,14 +143,14 @@ export default function ProviderDashboard() {
     if (!user) return;
     setLoading(true);
 
-    const bookingsRef = collection(db, "bookings");
-    const withdrawalsRef = collection(db, "users", user.uid, "withdrawals");
+    const bookingsRef = collection(db, 'bookings');
+    const withdrawalsRef = collection(db, 'users', user.uid, 'withdrawals');
 
     // Only count bookings whose Service Release PIN has been verified
     const qBookings = query(
       bookingsRef,
-      where("providerId", "==", user.uid),
-      where("releaseVerified", "==", true),
+      where('providerId', '==', user.uid),
+      where('releaseVerified', '==', true),
     );
 
     const qWithdrawals = query(withdrawalsRef);
@@ -168,8 +169,8 @@ export default function ProviderDashboard() {
     const unsubWithdrawals = onSnapshot(qWithdrawals, (snap) => {
       totalWithdrawn = snap.docs
         .filter((d) =>
-          ["completed", "success"].includes(
-            (d.data().status || "").toLowerCase(),
+          ['completed', 'success'].includes(
+            (d.data().status || '').toLowerCase(),
           ),
         )
         .reduce((sum, d) => sum + (d.data().amount || 0), 0);
@@ -190,13 +191,13 @@ export default function ProviderDashboard() {
 
     (async () => {
       try {
-        const bookingsRef = collection(db, "bookings");
+        const bookingsRef = collection(db, 'bookings');
         const snap = await getDocs(
           query(
             bookingsRef,
-            where("providerId", "==", user.uid),
+            where('providerId', '==', user.uid),
             // statuses that represent paid / in-progress bookings
-            where("status", "in", ["confirmed", "accepted", "completed"]),
+            where('status', 'in', ['confirmed', 'accepted', 'completed']),
           ),
         );
 
@@ -215,7 +216,7 @@ export default function ProviderDashboard() {
         setPendingEarnings(Math.round(total * 100) / 100);
         setPendingBookings(pending);
       } catch (err) {
-        console.error("Pending funds load error:", err);
+        console.error('Pending funds load error:', err);
       }
     })();
   }, [user]);
@@ -229,10 +230,7 @@ export default function ProviderDashboard() {
       try {
         // All bookings for this provider
         const bookingsSnap = await getDocs(
-          query(
-            collection(db, "bookings"),
-            where("providerId", "==", user.uid),
-          ),
+          query(collection(db, 'bookings'), where('providerId', '==', user.uid)),
         );
 
         const summary: BookingSummary = {
@@ -247,30 +245,31 @@ export default function ProviderDashboard() {
 
         const byVideo = new Map<string, number>();
         const byClient = new Map<string, number>();
+        let lost = 0; // NEW – provider-side value of refunded bookings
 
         bookingsSnap.forEach((d) => {
           const data = d.data() as any;
           summary.total += 1;
-          const status = (data.status || "").toLowerCase();
+          const status = (data.status || '').toLowerCase();
 
           switch (status) {
-            case "pending":
+            case 'pending':
               summary.pending += 1;
               break;
-            case "accepted":
+            case 'accepted':
               summary.accepted += 1;
               break;
-            case "confirmed":
+            case 'confirmed':
               summary.confirmed += 1;
               break;
-            case "completed":
+            case 'completed':
               summary.completed += 1;
               break;
-            case "rejected":
+            case 'rejected':
               summary.rejected += 1;
               break;
-            case "cancelled":
-            case "canceled":
+            case 'cancelled':
+            case 'canceled':
               summary.cancelled += 1;
               break;
           }
@@ -283,13 +282,24 @@ export default function ProviderDashboard() {
           if (cid) {
             byClient.set(cid, (byClient.get(cid) || 0) + 1);
           }
+
+          // Mark as "lost revenue" if refunded to client
+          if (
+            (status === 'rejected' ||
+              status === 'cancelled' ||
+              status === 'canceled') &&
+            (data.refundWalletTxId || data.refundedAt)
+          ) {
+            lost += providerShare(data);
+          }
         });
 
         setBookingSummary(summary);
+        setLostRevenue(Math.round(lost * 100) / 100);
 
         // Followers
         const followersSnap = await getDocs(
-          collection(db, "users", user.uid, "followers"),
+          collection(db, 'users', user.uid, 'followers'),
         );
         setFollowersCount(followersSnap.size);
 
@@ -297,20 +307,20 @@ export default function ProviderDashboard() {
         const videoStatList: VideoStat[] = [];
         for (const [videoId, bookingsCount] of byVideo.entries()) {
           try {
-            const vSnap = await getDoc(doc(db, "videos", videoId));
-            let title = "Untitled service";
+            const vSnap = await getDoc(doc(db, 'videos', videoId));
+            let title = 'Untitled service';
             if (vSnap.exists()) {
               const vData = vSnap.data() as any;
               title = vData.title || vData.description || title;
             }
             let likes = 0;
             const likesSnap = await getDocs(
-              collection(db, "videos", videoId, "likes"),
+              collection(db, 'videos', videoId, 'likes'),
             );
             likes = likesSnap.size;
             videoStatList.push({ videoId, title, bookings: bookingsCount, likes });
           } catch (e) {
-            console.error("Error loading video stats for", videoId, e);
+            console.error('Error loading video stats for', videoId, e);
           }
         }
         setVideoStats(videoStatList);
@@ -319,7 +329,7 @@ export default function ProviderDashboard() {
         const clientStatList: ClientStat[] = [];
         for (const [clientId, bookingsCount] of byClient.entries()) {
           try {
-            const cSnap = await getDoc(doc(db, "users", clientId));
+            const cSnap = await getDoc(doc(db, 'users', clientId));
             let name = clientId;
             if (cSnap.exists()) {
               const cData = cSnap.data() as any;
@@ -332,13 +342,13 @@ export default function ProviderDashboard() {
             }
             clientStatList.push({ clientId, name, bookings: bookingsCount });
           } catch (e) {
-            console.error("Error loading client stats for", clientId, e);
+            console.error('Error loading client stats for', clientId, e);
           }
         }
         clientStatList.sort((a, b) => b.bookings - a.bookings);
         setLoyalClients(clientStatList.slice(0, 5));
       } catch (err) {
-        console.error("Stats load error:", err);
+        console.error('Stats load error:', err);
       } finally {
         setStatsLoading(false);
       }
@@ -346,7 +356,7 @@ export default function ProviderDashboard() {
   }, [user]);
 
   if (!user) return <p className="p-6">Please sign in to view this page.</p>;
-  if (loading && activeTab === "wallet")
+  if (loading && activeTab === 'wallet')
     return <p className="p-6">Loading balance…</p>;
 
   const handleWithdrawClick = () => {
@@ -365,21 +375,21 @@ export default function ProviderDashboard() {
       <div className="mb-6 flex justify-center">
         <div className="inline-flex rounded-full bg-gray-100 p-1">
           <button
-            onClick={() => setActiveTab("wallet")}
+            onClick={() => setActiveTab('wallet')}
             className={`px-4 py-1.5 text-sm rounded-full ${
-              activeTab === "wallet"
-                ? "bg-white shadow text-green-700 font-semibold"
-                : "text-gray-600 hover:text-gray-800"
+              activeTab === 'wallet'
+                ? 'bg-white shadow text-green-700 font-semibold'
+                : 'text-gray-600 hover:text-gray-800'
             }`}
           >
             Wallet
           </button>
           <button
-            onClick={() => setActiveTab("stats")}
+            onClick={() => setActiveTab('stats')}
             className={`px-4 py-1.5 text-sm rounded-full ${
-              activeTab === "stats"
-                ? "bg-white shadow text-green-700 font-semibold"
-                : "text-gray-600 hover:text-gray-800"
+              activeTab === 'stats'
+                ? 'bg-white shadow text-green-700 font-semibold'
+                : 'text-gray-600 hover:text-gray-800'
             }`}
           >
             Statistics
@@ -387,7 +397,7 @@ export default function ProviderDashboard() {
         </div>
       </div>
 
-      {activeTab === "wallet" ? (
+      {activeTab === 'wallet' ? (
         <>
           {/* Wallet balance */}
           <div className="p-6 bg-white shadow rounded mb-4">
@@ -401,7 +411,7 @@ export default function ProviderDashboard() {
                 transition={{ duration: 0.6 }}
                 className="text-3xl font-bold text-green-700 mt-2"
               >
-                KSH{" "}
+                KSH{' '}
                 <motion.span
                   animate={{
                     opacity: [0.6, 1],
@@ -435,8 +445,8 @@ export default function ProviderDashboard() {
                 {pendingBookings.map((b) => {
                   const dateStr = b.date
                     ? new Date(b.date).toLocaleDateString()
-                    : "-";
-                  const timeStr = b.time || "-";
+                    : '-';
+                  const timeStr = b.time || '-';
                   const amount = providerShare(b);
                   return (
                     <div
@@ -464,6 +474,21 @@ export default function ProviderDashboard() {
                 PINs are already available in your balance.
               </p>
             )}
+          </div>
+
+          {/* NEW: Refunded / lost revenue card */}
+          <div className="p-4 bg-white shadow rounded mb-6">
+            <h2 className="font-semibold text-gray-700">
+              Refunded / Cancelled Bookings
+            </h2>
+            <p className="text-xl font-bold text-red-700 mt-1">
+              KSH {lostRevenue.toFixed(2)}
+            </p>
+            <p className="mt-1 text-xs text-gray-500">
+              Total value of bookings that were confirmed, then later rejected
+              or cancelled and refunded to clients. These amounts never entered
+              your available balance.
+            </p>
           </div>
 
           {/* Withdraw button */}
@@ -577,7 +602,7 @@ export default function ProviderDashboard() {
                         <span className="truncate mr-2">{v.title}</span>
                         <span className="text-gray-700 font-semibold">
                           {v.bookings} booking
-                          {v.bookings === 1 ? "" : "s"}
+                          {v.bookings === 1 ? '' : 's'}
                         </span>
                       </li>
                     ))}
@@ -603,7 +628,7 @@ export default function ProviderDashboard() {
                       >
                         <span className="truncate mr-2">{v.title}</span>
                         <span className="text-gray-700 font-semibold">
-                          {v.likes} like{v.likes === 1 ? "" : "s"}
+                          {v.likes} like{v.likes === 1 ? '' : 's'}
                         </span>
                       </li>
                     ))}
@@ -630,7 +655,7 @@ export default function ProviderDashboard() {
                         <span className="truncate mr-2">{c.name}</span>
                         <span className="text-gray-700 font-semibold">
                           {c.bookings} booking
-                          {c.bookings === 1 ? "" : "s"}
+                          {c.bookings === 1 ? '' : 's'}
                         </span>
                       </li>
                     ))}

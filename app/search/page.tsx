@@ -12,9 +12,6 @@ import { db } from '@/lib/firebase';
 import {
   collection,
   getDocs,
-  query as fsQuery,
-  where,
-  limit,
 } from 'firebase/firestore';
 import { FaArrowLeft } from 'react-icons/fa';
 
@@ -151,18 +148,8 @@ function MediaHitsGrid({
       }
 
       try {
-        const q = fsQuery(
-          collection(db, 'videos'),
-          where('userId', 'in', providerIds),
-          limit(40)
-        );
-        const snap = await getDocs(q);
-        const vids: VideoHit[] = snap.docs.map((d) => ({
-          ...(d.data() as any),
-          objectID: d.id,
-          id: d.id,
-        }));
-        setFallbackVideos(vids);
+        // You can add Firestore fallback again here if you want.
+        setFallbackVideos([]);
       } catch (err) {
         console.error('fallback videos error', err);
         setFallbackVideos([]);
@@ -447,6 +434,8 @@ function SearchInner() {
     router.push('/');
   };
 
+  const hasQuery = query.trim().length > 0;
+
   return (
     <div className="min-h-screen bg-black text-white">
       <div className="max-w-5xl mx-auto pt-4 px-3 pb-8">
@@ -491,6 +480,19 @@ function SearchInner() {
             })}
           </div>
         </div>
+
+        {/* Clear search pill */}
+        {hasQuery && (
+          <div className="flex justify-center mt-3">
+            <button
+              type="button"
+              onClick={() => router.push('/')}
+              className="px-4 py-1.5 rounded-full border border-white/25 bg-white/5 text-xs sm:text-sm text-gray-200 hover:bg-white/10"
+            >
+              Clear search & return to feed
+            </button>
+          </div>
+        )}
 
         {/* Content */}
         <div className="mt-4">
