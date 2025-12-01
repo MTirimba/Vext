@@ -1,0 +1,37 @@
+
+> vext@0.1.0 build
+> next build
+
+   ▲ Next.js 15.4.5
+   - Environments: .env.local
+
+   Creating an optimized production build ...
+ ⚠ Compiled with warnings in 15.0s
+
+./app/api/user/[uid]/route.ts
+Attempted import error: 'initAdmin' is not exported from '@/lib/firebaseAdmin' (imported as 'initAdmin').
+
+Import trace for requested module:
+./app/api/user/[uid]/route.ts
+
+ ✓ Compiled successfully in 26.0s
+   Skipping validation of types
+   Skipping linting
+   Collecting page data ...
+   Generating static pages (0/26) ...
+   Generating static pages (6/26) 
+   Generating static pages (12/26) 
+ ⨯ useSearchParams() should be wrapped in a suspense boundary at page "/messages". Read more: https://nextjs.org/docs/messages/missing-suspense-with-csr-bailout
+    at g (/workspaces/Vext/.next/server/chunks/765.js:3:16584)
+    at l (/workspaces/Vext/.next/server/chunks/765.js:7:55406)
+    at k (/workspaces/Vext/.next/server/app/messages/page.js:2:30475)
+    at n4 (/workspaces/Vext/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:2:81697)
+    at n8 (/workspaces/Vext/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:2:83467)
+    at n9 (/workspaces/Vext/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:2:103676)
+    at n5 (/workspaces/Vext/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:2:101094)
+    at n3 (/workspaces/Vext/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:2:82049)
+    at n8 (/workspaces/Vext/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:2:83513)
+    at n8 (/workspaces/Vext/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:2:100435)
+Error occurred prerendering page "/messages". Read more: https://nextjs.org/docs/messages/prerender-error
+Export encountered an error on /messages/page: /messages, exiting the build.
+ ⨯ Next.js build worker exited with code: 1 and signal: null

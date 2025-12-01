@@ -1,35 +1,35 @@
-export const runtime = 'nodejs';
+import { NextResponse } from "next/server";
 
-import { NextRequest, NextResponse } from 'next/server';
+export async function POST(req: Request) {
+  try {
+    const { email, amount, metadata } = await req.json();
 
-export async function POST(req: NextRequest) {
-  const { email, amount } = await req.json();
+    const key = process.env.PAYSTACK_SECRET_KEY;
+    if (!key) throw new Error("Missing Paystack secret key");
 
-  if (!email || !amount) {
-    return NextResponse.json({ error: 'Missing email or amount' }, { status: 400 });
+    const res = await fetch("https://api.paystack.co/transaction/initialize", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        email,
+        amount: Math.round(amount * 100),
+        currency: "KES",
+        metadata,
+      }),
+    });
+
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || "Paystack init failed");
+
+    return NextResponse.json({
+      reference: data.data.reference,
+      authorization_url: data.data.authorization_url,
+    });
+  } catch (error: any) {
+    console.error("Paystack init error:", error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
-
-  const res = await fetch('https://api.paystack.co/transaction/initialize', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      email,
-      amount: amount * 100,
-      currency: 'KES',
-    }),
-  });
-
-  const data = await res.json();
-
-  if (!res.ok) {
-    return NextResponse.json({ error: data.message }, { status: res.status });
-  }
-
-  return NextResponse.json({
-    authorization_url: data.data.authorization_url,
-    reference: data.data.reference,
-  });
 }

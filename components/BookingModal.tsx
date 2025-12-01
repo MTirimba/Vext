@@ -1,257 +1,839 @@
-'use client';
+"use client";
 
-import { useState, useEffect } from 'react';
-import Calendar from 'react-calendar';
-import 'react-calendar/dist/Calendar.css';
-import { auth, db } from '../lib/firebase';
-import { useAuthState } from 'react-firebase-hooks/auth';
-import PhoneInput from 'react-phone-number-input';
-import 'react-phone-number-input/style.css';
-import { getDoc, doc, updateDoc } from 'firebase/firestore';
+import { useEffect, useRef, useState, useMemo } from "react";
+import Calendar from "react-calendar";
+import "react-calendar/dist/Calendar.css";
+import { auth, db } from "../lib/firebase";
+import { useAuthState } from "react-firebase-hooks/auth";
+import PhoneInput from "react-phone-number-input";
+import "react-phone-number-input/style.css";
+import {
+  getDoc,
+  doc,
+  updateDoc,
+  collection,
+  getDocs,
+  onSnapshot,
+  Unsubscribe,
+} from "firebase/firestore";
+import { onAuthStateChanged } from "firebase/auth";
+import { useRouter } from "next/navigation";
+import AuthModal from "./AuthModal";
+
+async function serverLog(data: any) {
+  try {
+    await fetch("/api/log", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+  } catch {}
+}
 
 interface Addon {
   name: string;
   cost: number;
   unit: string;
 }
-
 interface VideoDoc {
+  id?: string;
+  userId?: string;
   serviceCost?: number;
   addons?: Addon[];
-  userId?: string;
-  id?: string;
-}
-
-interface UserProfile {
-  location?: string;
-  phone?: string;
-  name?: string;
+  specialInstructions?: string | null;
+  serviceIncludes?: string[];
+  notProvided?: string[];
 }
 
 interface BookingModalProps {
   video: VideoDoc;
-  creator: UserProfile;
   onClose: () => void;
 }
 
-export default function BookingModal({ video, creator, onClose }: BookingModalProps) {
-  const [user] = useAuthState(auth);
-  const [profileComplete, setProfileComplete] = useState(false);
-  const [step, setStep] = useState(1);
-  const [selectedDate, setSelectedDate] = useState<Date>(new Date());
-  const [selectedTime, setSelectedTime] = useState<string>('');
-  const [addonSelections, setAddonSelections] = useState<Record<string, number>>({});
-  const [name, setName] = useState('');
-  const [phone, setPhone] = useState('');
+type ConfirmedInfo = {
+  bookingId: string;
+  shortId?: string;
+  ref?: string;
+  dateISO: string;
+  time: string;
+  total: number;
+  serviceTitle?: string;
+  completionPin?: string; // 🔐 PIN for service completion verification
+};
 
+/* ---------- Provider schedule helpers ---------- */
+type DayMinutes = { start: number; end: number };
+type ScheduleMap = Partial<Record<number, DayMinutes>>;
+
+function hhmmToMin(hhmm: string): number {
+  const [h, m] = hhmm.split(":").map((x) => parseInt(x, 10));
+  return (h || 0) * 60 + (m || 0);
+}
+function minToHhmm(min: number): string {
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+function normalizeScheduleFromProfile(profile: any | null): ScheduleMap {
+  const out: ScheduleMap = {};
+  if (!profile) {
+    for (let d of [1, 2, 3, 4, 5, 6]) out[d] = { start: 9 * 60, end: 17 * 60 };
+    return out;
+  }
+  if (profile?.businessHours && typeof profile.businessHours === "object") {
+    const obj = profile.businessHours;
+    Object.keys(obj).forEach((key) => {
+      const di = Number(key);
+      const dayIdx = di === 7 ? 0 : di;
+      out[dayIdx] = {
+        start: hhmmToMin(obj[key]?.start || "09:00"),
+        end: hhmmToMin(obj[key]?.end || "17:00"),
+      };
+    });
+    return out;
+  }
+  if (
+    Array.isArray(profile?.operatingDays) &&
+    profile?.openTime &&
+    profile?.closeTime
+  ) {
+    const start = hhmmToMin(profile.openTime);
+    const end = hhmmToMin(profile.closeTime);
+    (profile.operatingDays as number[]).forEach(
+      (d) => (out[d] = { start, end }),
+    );
+    return out;
+  }
+  if (profile?.hours && typeof profile.hours === "object") {
+    const map: Record<string, number> = {
+      sun: 0,
+      mon: 1,
+      tue: 2,
+      wed: 3,
+      thu: 4,
+      fri: 5,
+      sat: 6,
+    };
+    Object.keys(map).forEach((k) => {
+      if (profile.hours[k]) {
+        out[map[k]] = {
+          start: hhmmToMin(profile.hours[k].start || "09:00"),
+          end: hhmmToMin(profile.hours[k].end || "17:00"),
+        };
+      }
+    });
+    return out;
+  }
+  for (let d of [1, 2, 3, 4, 5, 6]) out[d] = { start: 9 * 60, end: 17 * 60 };
+  return out;
+}
+function generateSlotsForDate(
+  date: Date,
+  schedule: ScheduleMap,
+  stepMinutes = 60,
+): string[] {
+  const dayIdx = date.getDay();
+  const window = schedule[dayIdx];
+  if (!window) return [];
+  const out: string[] = [];
+  for (let t = window.start; t < window.end; t += stepMinutes)
+    out.push(minToHhmm(t));
+  return out;
+}
+function isPastDay(d: Date): boolean {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const cmp = new Date(d);
+  cmp.setHours(0, 0, 0, 0);
+  return cmp.getTime() < today.getTime();
+}
+function isTimeInPastToday(hhmm: string): boolean {
+  const now = new Date();
+  const [hh, mm] = hhmm.split(":").map((x) => parseInt(x, 10));
+  const slotDate = new Date();
+  slotDate.setHours(hh, mm, 0, 0);
+  return slotDate.getTime() <= now.getTime();
+}
+/* ---------------------------------------------- */
+
+export default function BookingModal({ video, onClose }: BookingModalProps) {
+  const router = useRouter();
+  const [user] = useAuthState(auth);
+
+  const [authOpen, setAuthOpen] = useState(false);
+  const [profileComplete, setProfileComplete] = useState(false);
+  const [step, setStep] = useState<1 | 2 | 3>(1);
+
+  const [selectedDate, setSelectedDate] = useState<Date>(new Date());
+  const [selectedTime, setSelectedTime] = useState<string>("");
+
+  const [addonSelections, setAddonSelections] = useState<
+    Record<string, number>
+  >({});
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [paymentMethod, setPaymentMethod] = useState<
+    "paystack" | "mpesa" | "pesapal" | ""
+  >("");
+  const [mpesaPhone, setMpesaPhone] = useState("");
+  const [bookedTimes, setBookedTimes] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const [confirmed, setConfirmed] = useState<ConfirmedInfo | null>(null);
+  const [lastShortId, setLastShortId] = useState<string | null>(null);
+
+  const [mpesaPending, setMpesaPending] = useState(false);
+  const bookingUnsubRef = useRef<Unsubscribe | null>(null);
+
+  const [providerSchedule, setProviderSchedule] = useState<ScheduleMap>({});
+
+  // 🔐 holds the completion PIN from backend for this booking
+  const [completionPin, setCompletionPin] = useState<string | null>(null);
+
+  // Pricing
+  const markupRate = 0.1;
   const base = video.serviceCost || 0;
   const addons = video.addons || [];
-  const total = base + Object.entries(addonSelections).reduce((sum, [n, qty]) => {
-    const addon = addons.find(a => a.name === n);
-    return sum + (addon ? addon.cost * qty : 0);
-  }, 0);
+  const withMarkup = (n: number) => Math.round(n * (1 + markupRate));
+  const addonsRawTotal = Object.entries(addonSelections).reduce(
+    (sum, [n, qty]) => {
+      const addon = addons.find((a) => a.name === n);
+      return sum + (addon ? addon.cost * qty : 0);
+    },
+    0,
+  );
+  const subtotalRaw = base + addonsRawTotal;
+  const totalWithMarkup = withMarkup(subtotalRaw);
+  const baseForDisplay = withMarkup(base);
+  const extrasForDisplay = withMarkup(addonsRawTotal);
+
+  const specialInstructions = video.specialInstructions || "";
+  const includes = video.serviceIncludes || [];
+  const notProvided = video.notProvided || [];
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, async (u) => {
+      if (u) {
+        setAuthOpen(false);
+        const snap = await getDoc(doc(db, "users", u.uid));
+        if (snap.exists()) {
+          const d = snap.data() as any;
+          const hasProfile = !!d.fullName && !!d.phone;
+          setProfileComplete(hasProfile);
+          setName(d.fullName || "");
+          setPhone(d.phone || "");
+          setMpesaPhone(d.phone || "");
+          setStep(1);
+        } else {
+          setProfileComplete(false);
+          setStep(1);
+        }
+      } else {
+        setProfileComplete(false);
+      }
+    });
+    return () => unsub();
+  }, []);
 
   useEffect(() => {
     if (!user) return;
-    getDoc(doc(db, 'users', user.uid)).then(snap => {
-      if (snap.exists()) {
-        const d = snap.data() as any;
-        setProfileComplete(!!d.fullName && !!d.phone);
-        setName(d.fullName || '');
-        setPhone(d.phone || '');
-      }
+    getDoc(doc(db, "users", user.uid)).then((snap) => {
+      if (!snap.exists()) return;
+      const d = snap.data() as any;
+      setProfileComplete(!!d.fullName && !!d.phone);
+      setName(d.fullName || "");
+      setPhone(d.phone || "");
+      setMpesaPhone(d.phone || "");
     });
   }, [user]);
 
+  useEffect(() => {
+    (async () => {
+      if (!video?.userId) return;
+      try {
+        const ps = await getDoc(doc(db, "users", video.userId));
+        const prof = ps.exists() ? (ps.data() as any) : null;
+        setProviderSchedule(normalizeScheduleFromProfile(prof));
+      } catch {
+        setProviderSchedule(normalizeScheduleFromProfile(null));
+      }
+    })();
+  }, [video?.userId]);
+
+  useEffect(() => {
+    if (!video?.userId || !selectedDate) return;
+    const dateStr = selectedDate.toISOString().split("T")[0];
+    const q = collection(db, `availability/${video.userId}/slots`);
+    const unsub = onSnapshot(q, (snapshot) => {
+      const times: string[] = [];
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        if (data.date === dateStr && data.booked) times.push(data.time);
+      });
+      setBookedTimes(times);
+    });
+    return () => unsub();
+  }, [video?.userId, selectedDate]);
+
+  useEffect(() => {
+    return () => {
+      if (bookingUnsubRef.current) {
+        bookingUnsubRef.current();
+        bookingUnsubRef.current = null;
+      }
+    };
+  }, []);
+
   const handleProfileSave = async () => {
-    if (!user) return alert('You must be signed in');
-    if (!name.trim() || !phone) return alert('Name & phone are required');
-    await updateDoc(doc(db, 'users', user.uid), { fullName: name.trim(), phone });
+    if (!user) return alert("You must be signed in");
+    if (!name.trim() || !phone) return alert("Name & phone required");
+    await updateDoc(doc(db, "users", user.uid), {
+      fullName: name.trim(),
+      phone,
+    });
     setProfileComplete(true);
   };
 
-  const handlePay = async () => {
-    if (!profileComplete) return;
+  function normalizeKeMpesaPhone(raw: string) {
+    let p = (raw || "").trim().replace(/\s+/g, "");
+    if (p.startsWith("+")) p = p.slice(1);
+    if (p.startsWith("0")) p = `254${p.slice(1)}`;
+    else if (p.startsWith("7")) p = `254${p}`;
+    else if (!p.startsWith("254")) throw new Error("Enter valid KE number");
+    p = p.replace(/\D/g, "");
+    if (!(p.length === 12 && p.startsWith("2547")))
+      throw new Error("Invalid Safaricom number");
+    return p;
+  }
 
-    try {
-      // Step 1: Save booking first
-      const bookingData = {
-        clientId: user!.uid,
-        providerId: video.userId,
-        videoId: video.id || '',
-        date: selectedDate.toISOString(),
-        time: selectedTime,
-        total,
-        addons: addonSelections,
-        addonsSelected: Object.keys(addonSelections),
-        status: 'pending', // Payment not confirmed yet
-        clientPhone: phone,
-        providerPhone: creator.phone,
-        clientName: name,
-        creatorName: creator.name,
-      };
-
-      const saveRes = await fetch('/api/save-booking', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(bookingData),
-      });
-
-      const saveData = await saveRes.json();
-      if (!saveRes.ok) throw new Error(saveData.error || 'Failed to save booking');
-
-      const bookingId = saveData.bookingId;
-
-      // Step 2: Create Paystack transaction with bookingId in metadata
-      const initRes = await fetch('/api/paystack/init', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: user?.email,
-          amount: total,
-          metadata: { bookingId }, // ✅ Important
-        }),
-      });
-
-      const initData = await initRes.json();
-      if (!initRes.ok) throw new Error(initData.error || 'Payment init failed');
-
-      // Step 3: Open Paystack Inline Popup
-      const paystackHandler = (window as any).PaystackPop.setup({
-        key: process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY,
-        email: user?.email,
-        amount: total * 100,
-        currency: 'KES',
-        ref: initData.reference,
-        metadata: { bookingId },
-        callback: () => {
-          alert('Payment processing... We will confirm your booking shortly.');
-          onClose();
-        },
-        onClose: () => {
-          alert('Payment window closed');
-        }
-      });
-
-      paystackHandler.openIframe();
-    } catch (err: any) {
-      alert(err.message);
-    }
+  const refreshBookedTimes = async () => {
+    if (!video?.userId) return;
+    const q = collection(db, `availability/${video.userId}/slots`);
+    const snap = await getDocs(q);
+    const dateStr = selectedDate.toISOString().split("T")[0];
+    const times: string[] = [];
+    snap.forEach((docSnap) => {
+      const data = docSnap.data();
+      if (data.date === dateStr && data.booked) times.push(data.time);
+    });
+    setBookedTimes(times);
   };
 
-  const toggleAddon = (n: string) => {
-    setAddonSelections(prev => {
-      const current = { ...prev };
-      if (n in current) {
-        delete current[n];
-      } else {
-        current[n] = 1;
+  const incAddon = (name: string) =>
+    setAddonSelections((p) => ({ ...p, [name]: (p[name] || 0) + 1 }));
+  const decAddon = (name: string) =>
+    setAddonSelections((p) => {
+      const next = { ...p, [name]: Math.max(0, (p[name] || 0) - 1) };
+      if (next[name] === 0) delete next[name];
+      return next;
+    });
+
+  const waitForBookingConfirmation = (bookingId: string, dateISO: string) => {
+    if (bookingUnsubRef.current) {
+      bookingUnsubRef.current();
+      bookingUnsubRef.current = null;
+    }
+    const ref = doc(db, "bookings", bookingId);
+    bookingUnsubRef.current = onSnapshot(ref, (snap) => {
+      if (!snap.exists()) return;
+      const data = snap.data() as any;
+      const status = (data.status || "").toLowerCase();
+      if (status === "confirmed" || status === "completed") {
+        if (bookingUnsubRef.current) {
+          bookingUnsubRef.current();
+          bookingUnsubRef.current = null;
+        }
+        setMpesaPending(false);
+        setConfirmed({
+          bookingId,
+          shortId: data.shortId || lastShortId || undefined,
+          ref: data.paymentRef || undefined,
+          dateISO,
+          time: data.time || selectedTime,
+          total: data.total || totalWithMarkup,
+          serviceTitle: undefined,
+          completionPin: completionPin || undefined, // 🔐 we only know it from initial save
+        });
+        setStep(3);
       }
-      return current;
     });
   };
 
-  const updateAddonQty = (n: string, qty: number) => {
-    setAddonSelections(prev => ({
-      ...prev,
-      [n]: Math.max(1, qty),
-    }));
+  const handlePay = async () => {
+    if (!user) {
+      setAuthOpen(true);
+      return;
+    }
+    if (!profileComplete) return alert("Please complete your profile");
+    if (!paymentMethod) return alert("Select a payment method");
+
+    try {
+      setLoading(true);
+      const dateISO = selectedDate.toISOString().split("T")[0];
+
+      const bookingData = {
+        clientId: user!.uid,
+        providerId: video.userId,
+        videoId: video.id || "",
+        date: dateISO,
+        time: selectedTime,
+        subtotal: Math.round(subtotalRaw * 100) / 100,
+        total: totalWithMarkup,
+        markupRate,
+        markupAmount: totalWithMarkup - Math.round(subtotalRaw),
+        addons: addonSelections,
+      };
+
+      const saveRes = await fetch("/api/save-booking", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(bookingData),
+      });
+      const saveData = await saveRes.json();
+      if (!saveRes.ok)
+        throw new Error(saveData.error || "Failed to save booking");
+      const bookingId: string = saveData.bookingId;
+      const shortId: string | undefined = saveData.shortId;
+      setLastShortId(shortId || null);
+
+      // 🔐 capture completion PIN once from backend
+      if (saveData.completionPin) {
+        setCompletionPin(saveData.completionPin);
+      }
+
+      if (paymentMethod === "paystack") {
+        const ensurePaystackReady = () =>
+          new Promise<void>((resolve, reject) => {
+            if ((window as any).PaystackPop?.setup) return resolve();
+            const s = document.createElement("script");
+            s.src = "https://js.paystack.co/v1/inline.js";
+            s.async = true;
+            s.onload = () => {
+              const check = setInterval(() => {
+                if ((window as any).PaystackPop?.setup) {
+                  clearInterval(check);
+                  resolve();
+                }
+              }, 150);
+            };
+            s.onerror = () => reject(new Error("Failed to load Paystack"));
+            document.body.appendChild(s);
+          });
+        await ensurePaystackReady();
+
+        const initRes = await fetch("/api/paystack/init", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: user?.email || "noemail@vextup.com",
+            amount: totalWithMarkup,
+            metadata: { bookingId },
+          }),
+        });
+        const initData = await initRes.json();
+        if (!initRes.ok || !initData?.reference)
+          throw new Error(initData?.error || "Payment init failed");
+
+        const PaystackLib = (window as any).PaystackPop;
+        const handler = PaystackLib.setup({
+          key: process.env.NEXT_PUBLIC_PAYSTACK_KEY!,
+          email: user?.email || "noemail@vextup.com",
+          amount: Math.round(totalWithMarkup * 100),
+          currency: "KES",
+          ref: initData.reference,
+          metadata: { bookingId },
+          callback: async (response: any) => {
+            await fetch("/api/confirm-booking", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                bookingId,
+                paymentRef: response.reference,
+                method: "paystack",
+              }),
+            });
+            await refreshBookedTimes();
+            setConfirmed({
+              bookingId,
+              shortId,
+              ref: response.reference,
+              dateISO,
+              time: selectedTime,
+              total: totalWithMarkup,
+              completionPin:
+                saveData.completionPin || completionPin || undefined, // 🔐 show PIN on success
+            });
+            setStep(3);
+          },
+          onClose: () => {},
+        });
+        handler.openIframe();
+      }
+
+      if (paymentMethod === "mpesa") {
+        if (!mpesaPhone.trim())
+          return alert("Please enter the M-Pesa number to charge");
+        const msisdn = normalizeKeMpesaPhone(mpesaPhone);
+        setMpesaPending(true);
+        const mpesaRes = await fetch("/api/mpesa/init", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            phoneNumber: msisdn,
+            amount: totalWithMarkup,
+            bookingId,
+          }),
+        });
+        await mpesaRes.text();
+        waitForBookingConfirmation(bookingId, dateISO);
+      }
+    } catch (err: any) {
+      console.error("❌ Payment error:", err);
+      await serverLog({ step: "payError", message: err.message });
+      alert(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Derived slots
+  const candidateSlots = useMemo(
+    () => generateSlotsForDate(selectedDate, providerSchedule, 60),
+    [selectedDate, providerSchedule],
+  );
+
+  const tileDisabled = ({ date, view }: { date: Date; view: string }) => {
+    if (view !== "month") return false;
+    if (isPastDay(date)) return true;
+    const slots = generateSlotsForDate(date, providerSchedule, 60);
+    if (slots.length === 0) return true;
+
+    const isToday = date.toDateString() === new Date().toDateString();
+    const effective = isToday
+      ? slots.filter((t) => !isTimeInPastToday(t))
+      : slots;
+    if (effective.length === 0) return true;
+
+    // Fully-booked indicator only for selected day (we know its bookedTimes)
+    const selectedISO = selectedDate.toISOString().split("T")[0];
+    const thisISO = date.toISOString().split("T")[0];
+    if (thisISO === selectedISO) {
+      if (bookedTimes.length >= effective.length) return true;
+    }
+    return false;
   };
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
       <div className="bg-white text-black rounded-lg p-6 w-[90vw] max-w-md shadow-lg relative">
-        <button onClick={onClose} className="text-xl absolute top-4 right-4">×</button>
+        <button
+          onClick={onClose}
+          className="text-xl absolute top-4 right-4"
+          aria-label="Close"
+        >
+          ×
+        </button>
 
-        {!profileComplete ? (
-          <>
-            <h2 className="text-lg font-bold mb-3">Complete Your Profile</h2>
-            <label className="block mb-2">Full Name</label>
-            <input
-              value={name}
-              onChange={e => setName(e.target.value)}
-              className="w-full border rounded px-2 py-1 mb-4"
-            />
-            <label className="block mb-2">Phone Number</label>
-            <PhoneInput
-              international
-              defaultCountry="KE"
-              value={phone}
-              onChange={(value) => setPhone(value || '')}
-              className="w-full mb-4"
-            />
-            <button onClick={handleProfileSave} className="w-full bg-blue-600 text-white py-2 rounded">
-              Save & Continue
-            </button>
-          </>
-        ) : step === 1 ? (
-          <>
-            <h2 className="text-lg font-bold mb-3">Book Service</h2>
-            <label>Select Date:</label>
-            <Calendar onChange={d => setSelectedDate(d as Date)} value={selectedDate} />
-            <label className="mt-4 block">Select Time:</label>
-            <select
-              className="w-full border rounded px-2 py-1"
-              value={selectedTime}
-              onChange={e => setSelectedTime(e.target.value)}
-            >
-              <option value="">-- time --</option>
-              {['09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00']
-                .map(t => <option key={t} value={t}>{t}</option>)}
-            </select>
+        {/* Logo */}
+        <div className="flex justify-center mb-4">
+          <img
+            src="/vextup-logo.png"
+            alt="VEXTUP"
+            className="h-20 w-auto object-contain"
+          />
+        </div>
 
-            <div className="mt-4">
-              <p className="font-semibold">Service cost: KSHS {base}</p>
-              {addons.length > 0 && (
-                <>
-                  <p className="mt-2 font-semibold">Add-ons:</p>
-                  {addons.map(a => (
-                    <div key={a.name} className="flex items-center space-x-2 mt-1">
-                      <input
-                        type="checkbox"
-                        checked={a.name in addonSelections}
-                        onChange={() => toggleAddon(a.name)}
-                      />
-                      <span className="flex-1">{a.name} (+KSHS {a.cost}/{a.unit})</span>
-                      {a.name in addonSelections && (
-                        <input
-                          type="number"
-                          min={1}
-                          value={addonSelections[a.name]}
-                          onChange={e => updateAddonQty(a.name, +e.target.value)}
-                          className="w-16 px-2 py-1 border rounded text-center"
-                        />
-                      )}
-                    </div>
-                  ))}
-                </>
-              )}
-            </div>
-
-            <p className="mt-4 font-bold">Total: KSHS {total}</p>
+        {!user ? (
+          <div className="text-center p-2">
+            <h2 className="text-lg font-bold mb-2">Sign in to Book</h2>
+            <p className="text-sm text-gray-700 mb-4">
+              You need an account to book this service.
+            </p>
             <button
-              onClick={() => setStep(2)}
-              className="mt-4 w-full bg-green-600 text-white py-2 rounded"
+              onClick={() => setAuthOpen(true)}
+              className="px-4 py-2 rounded bg-[#0F7A5F] hover:bg-[#0b644e] text-white"
             >
-              Book
+              Sign In / Sign Up
             </button>
-          </>
+            {authOpen && (
+              <AuthModal
+                open={authOpen}
+                onClose={() => setAuthOpen(false)}
+              />
+            )}
+          </div>
         ) : (
           <>
-            <h2 className="text-lg font-bold mb-3">Confirm Booking</h2>
-            <p>Date: {selectedDate.toDateString()}</p>
-            <p>Time: {selectedTime}</p>
-            <p>Provider location: {creator.location || 'N/A'}</p>
-            <p>Total Cost: KSHS {total}</p>
-            <button
-              onClick={handlePay}
-              className="mt-4 w-full bg-blue-600 text-white py-2 rounded"
-            >
-              Proceed to Pay
-            </button>
+            {step === 3 && confirmed ? (
+              <div className="text-center">
+                <div className="mx-auto mb-4 w-14 h-14 rounded-full bg-green-100 flex items-center justify-center">
+                  <span className="text-2xl">✅</span>
+                </div>
+                <h2 className="text-xl font-bold mb-2">Booking Confirmed</h2>
+                <div className="text-sm text-gray-700 space-y-1 mb-4">
+                  {confirmed.shortId ? (
+                    <p>
+                      <strong>Booking Code:</strong> {confirmed.shortId}
+                    </p>
+                  ) : (
+                    <p>
+                      <strong>Booking ID:</strong> {confirmed.bookingId}
+                    </p>
+                  )}
+                  {confirmed.ref && (
+                    <p>
+                      <strong>Payment Ref:</strong> {confirmed.ref}
+                    </p>
+                  )}
+                  <p>
+                    <strong>Date:</strong>{" "}
+                    {new Date(confirmed.dateISO).toDateString()}
+                  </p>
+                  <p>
+                    <strong>Time:</strong> {confirmed.time}
+                  </p>
+                  <p>
+                    <strong>Total Paid:</strong> KSHS {confirmed.total}
+                  </p>
+                  {confirmed.completionPin && (
+                    <p className="mt-2">
+                      <strong>Service Release PIN:</strong>{" "}
+                      <span className="font-mono tracking-widest">
+                        {confirmed.completionPin}
+                      </span>
+                    </p>
+                  )}
+                </div>
+
+                {confirmed.completionPin && (
+                  <p className="text-xs text-gray-500 mb-4">
+                    Share this PIN with your provider{" "}
+                    <span className="font-semibold">only after</span> you are
+                    satisfied the service has been delivered. They will use it
+                    to confirm delivery and release funds.
+                  </p>
+                )}
+
+                <div className="flex gap-2 justify-center">
+                  <button
+                    onClick={() => {
+                      onClose();
+                      router.push("/bookings");
+                    }}
+                    className="px-4 py-2 rounded bg-[#0F7A5F] hover:bg-[#0b644e] text-white"
+                  >
+                    View My Bookings
+                  </button>
+                  <button
+                    onClick={onClose}
+                    className="px-4 py-2 rounded bg-gray-200"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                {!profileComplete ? (
+                  <>
+                    <h2 className="text-lg font-bold mb-3">
+                      Complete Your Profile
+                    </h2>
+                    <label>Full Name</label>
+                    <input
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      className="w-full border rounded px-2 py-1 mb-4"
+                    />
+                    <label>Phone Number</label>
+                    <PhoneInput
+                      international
+                      defaultCountry="KE"
+                      value={phone}
+                      onChange={(v) => setPhone(v || "")}
+                      className="w-full mb-4"
+                    />
+                    <button
+                      onClick={handleProfileSave}
+                      className="w-full bg-[#0F7A5F] hover:bg-[#0b644e] text-white py-2 rounded"
+                    >
+                      Save & Continue
+                    </button>
+                  </>
+                ) : step === 1 ? (
+                  <>
+                    <h2 className="text-lg font-bold mb-3">Book Service</h2>
+
+                    {specialInstructions ? (
+                      <div className="mb-3 p-3 rounded bg-emerald-50 border border-emerald-100 text-sm">
+                        <div className="font-semibold mb-1">
+                          Special instructions
+                        </div>
+                        <p className="text-gray-800 whitespace-pre-wrap">
+                          {specialInstructions}
+                        </p>
+                      </div>
+                    ) : null}
+
+                    {includes.length > 0 && (
+                      <div className="mb-3 p-3 rounded bg-gray-50 border text-sm">
+                        <div className="font-semibold mb-1">Included</div>
+                        <ul className="list-disc list-inside text-gray-800">
+                          {includes.map((it, i) => (
+                            <li key={i}>{it}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {notProvided.length > 0 && (
+                      <div className="mb-3 p-3 rounded bg-gray-50 border text-sm">
+                        <div className="font-semibold mb-1">Not provided</div>
+                        <ul className="list-disc list-inside text-gray-700">
+                          {notProvided.map((it, i) => (
+                            <li key={i}>{it}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {/* Date & time */}
+                    <Calendar
+                      onChange={(d) => {
+                        setSelectedDate(d as Date);
+                        setSelectedTime("");
+                      }}
+                      value={selectedDate}
+                      tileDisabled={tileDisabled}
+                    />
+
+                    <label className="mt-4 block">Select Time:</label>
+                    <select
+                      className="w-full border rounded px-2 py-1"
+                      value={selectedTime}
+                      onChange={(e) => setSelectedTime(e.target.value)}
+                    >
+                      <option value="">-- time --</option>
+                      {candidateSlots.length === 0 && (
+                        <option disabled>Closed</option>
+                      )}
+                      {candidateSlots.map((t) => {
+                        const isBooked = bookedTimes.includes(t);
+                        const isPast =
+                          selectedDate.toDateString() ===
+                            new Date().toDateString() &&
+                          isTimeInPastToday(t);
+                        const disabled = isBooked || isPast;
+                        return (
+                          <option key={t} value={t} disabled={disabled}>
+                            {t} {isBooked ? "(Booked)" : ""}
+                          </option>
+                        );
+                      })}
+                    </select>
+
+                    {/* Price summary */}
+                    <div className="mt-4 text-sm bg-gray-50 border rounded p-3">
+                      <div className="flex justify-between">
+                        <span>Base</span>
+                        <span className="tabular-nums">
+                          KSHS {baseForDisplay}
+                        </span>
+                      </div>
+                      {addonsRawTotal > 0 && (
+                        <div className="flex justify-between">
+                          <span>Extras</span>
+                          <span className="tabular-nums">
+                            KSHS {extrasForDisplay}
+                          </span>
+                        </div>
+                      )}
+                      <div className="flex justify-between font-semibold mt-1">
+                        <span>Total</span>
+                        <span className="tabular-nums">
+                          KSHS {totalWithMarkup}
+                        </span>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => setStep(2)}
+                      disabled={!selectedTime}
+                      className="mt-4 w-full bg-[#0F7A5F] hover:bg-[#0b644e] text-white py-2 rounded disabled:bg-gray-400"
+                    >
+                      Continue
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <h2 className="text-lg font-bold mb-3">Confirm Booking</h2>
+                    <p>Date: {selectedDate.toDateString()}</p>
+                    <p>Time: {selectedTime}</p>
+                    <p className="mt-2 font-semibold">
+                      Total: KSHS {totalWithMarkup}
+                    </p>
+
+                    <select
+                      className="w-full border rounded px-2 py-1 mt-2"
+                      value={paymentMethod}
+                      onChange={(e) =>
+                        setPaymentMethod(e.target.value as any)
+                      }
+                      disabled={mpesaPending}
+                    >
+                      <option value="">-- choose --</option>
+                      <option value="paystack">Pay with Card (Paystack)</option>
+                      <option value="mpesa">Pay with M-Pesa</option>
+                    </select>
+
+                    {paymentMethod === "mpesa" && (
+                      <div className="mt-3">
+                        <label className="block font-semibold">
+                          M-Pesa number to charge
+                        </label>
+                        <input
+                          type="tel"
+                          placeholder="2547XXXXXXXX"
+                          className="w-full border rounded px-2 py-1 mt-2"
+                          value={mpesaPhone}
+                          onChange={(e) => setMpesaPhone(e.target.value)}
+                          disabled={mpesaPending}
+                        />
+                        <p className="text-xs text-gray-600 mt-1">
+                          Use format 2547XXXXXXXX (no + sign)
+                        </p>
+                      </div>
+                    )}
+
+                    <button
+                      onClick={handlePay}
+                      disabled={loading || mpesaPending}
+                      className="mt-4 w-full bg-[#0F7A5F] hover:bg-[#0b644e] text-white py-2 rounded disabled:bg-gray-400"
+                    >
+                      {loading ? "Processing..." : "Proceed to Pay"}
+                    </button>
+
+                    {mpesaPending && (
+                      <div className="mt-4 p-3 rounded bg-emerald-50 border border-emerald-200 text-sm">
+                        <div className="font-semibold mb-1">
+                          Waiting for M-Pesa confirmation…
+                        </div>
+                        <p className="text-gray-700">
+                          Approve the STK push on your phone. This screen will
+                          update automatically once payment is confirmed.
+                        </p>
+                      </div>
+                    )}
+                  </>
+                )}
+              </>
+            )}
           </>
         )}
       </div>
+
+      {authOpen && (
+        <AuthModal open={authOpen} onClose={() => setAuthOpen(false)} />
+      )}
     </div>
   );
 }
