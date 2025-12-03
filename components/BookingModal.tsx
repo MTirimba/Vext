@@ -99,7 +99,7 @@ function getMarkupPercent(basePrice: number, config?: MarkupConfig | null) {
   const tier = cfg.tiers.find(
     (t) => basePrice >= t.min && (t.max == null || basePrice <= t.max),
   );
-  return tier ? t.percent : 0;
+  return tier ? tier.percent : 0; // ✅ use `tier`
 }
 
 /* ---------- Provider schedule helpers ---------- */
@@ -196,6 +196,51 @@ function isTimeInPastToday(hhmm: string): boolean {
   return slotDate.getTime() <= now.getTime();
 }
 /* ---------------------------------------------- */
+
+/**
+ * Normalize Kenyan Safaricom M-Pesa numbers to 2547XXXXXXXX.
+ * Accepts:
+ *  - 07XXXXXXXX
+ *  - 7XXXXXXXX
+ *  - 2547XXXXXXXX
+ *  - +2547XXXXXXXX
+ */
+function normalizeKeMpesaPhone(raw: string) {
+  let p = (raw || "").trim();
+  if (!p) {
+    throw new Error("Enter the M-Pesa phone number");
+  }
+
+  // remove spaces
+  p = p.replace(/\s+/g, "");
+
+  // strip leading +
+  if (p.startsWith("+")) {
+    p = p.slice(1);
+  }
+
+  // keep only digits
+  p = p.replace(/[^\d]/g, "");
+
+  // 07XXXXXXXX (10 digits)
+  if (/^07\d{8}$/.test(p)) {
+    return "254" + p.slice(1); // 07 -> 2547
+  }
+
+  // 7XXXXXXXX (9 digits)
+  if (/^7\d{8}$/.test(p)) {
+    return "254" + p; // 7 -> 2547
+  }
+
+  // 2547XXXXXXXX (12 digits)
+  if (/^2547\d{8}$/.test(p)) {
+    return p;
+  }
+
+  throw new Error(
+    "Enter a valid Safaricom number like 07XXXXXXXX, 7XXXXXXXX, 2547XXXXXXXX or +2547XXXXXXXX",
+  );
+}
 
 export default function BookingModal({ video, onClose }: BookingModalProps) {
   const router = useRouter();
@@ -378,18 +423,6 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
     setProfileComplete(true);
   };
 
-  function normalizeKeMpesaPhone(raw: string) {
-    let p = (raw || "").trim().replace(/\s+/g, "");
-    if (p.startsWith("+")) p = p.slice(1);
-    if (p.startsWith("0")) p = `254${p.slice(1)}`;
-    else if (p.startsWith("7")) p = `254${p}`;
-    else if (!p.startsWith("254")) throw new Error("Enter valid KE number");
-    p = p.replace(/\D/g, "");
-    if (!(p.length === 12 && p.startsWith("2547")))
-      throw new Error("Invalid Safaricom number");
-    return p;
-  }
-
   const refreshBookedTimes = async () => {
     if (!video?.userId) return;
     const q = collection(db, `availability/${video.userId}/slots`);
@@ -412,6 +445,7 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
       return next;
     });
 
+  // 🔔 UPDATED: also handle payment_failed so the UI stops spinning on failure
   const waitForBookingConfirmation = (bookingId: string, dateISO: string) => {
     if (bookingUnsubRef.current) {
       bookingUnsubRef.current();
@@ -422,6 +456,8 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
       if (!snap.exists()) return;
       const data = snap.data() as any;
       const status = (data.status || "").toLowerCase();
+      console.log("[BOOKING LISTENER] status:", bookingId, status);
+
       if (status === "confirmed" || status === "completed") {
         if (bookingUnsubRef.current) {
           bookingUnsubRef.current();
@@ -436,9 +472,18 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
           time: data.time || selectedTime,
           total: data.total || totalWithMarkup,
           serviceTitle: undefined,
-          completionPin: completionPin || undefined, // 🔐 we only know it from initial save
+          completionPin: completionPin || undefined,
         });
         setStep(3);
+      } else if (status === "payment_failed") {
+        if (bookingUnsubRef.current) {
+          bookingUnsubRef.current();
+          bookingUnsubRef.current = null;
+        }
+        setMpesaPending(false);
+        alert(
+          "Your M-Pesa payment failed or was cancelled. Please try again.",
+        );
       }
     });
   };
@@ -524,6 +569,8 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
           throw new Error(initData?.error || "Payment init failed");
 
         const PaystackLib = (window as any).PaystackPop;
+
+        // ⚠️ IMPORTANT: Pass a plain function (not async) to Paystack
         const handler = PaystackLib.setup({
           key: process.env.NEXT_PUBLIC_PAYSTACK_KEY!,
           email: user?.email || "noemail@vextup.com",
@@ -531,28 +578,37 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
           currency: "KES",
           ref: initData.reference,
           metadata: { bookingId },
-          callback: async (response: any) => {
-            await fetch("/api/confirm-booking", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                bookingId,
-                paymentRef: response.reference,
-                method: "paystack",
-              }),
-            });
-            await refreshBookedTimes();
-            setConfirmed({
-              bookingId,
-              shortId,
-              ref: response.reference,
-              dateISO,
-              time: selectedTime,
-              total: totalWithMarkup,
-              completionPin:
-                saveData.completionPin || completionPin || undefined, // 🔐 show PIN on success
-            });
-            setStep(3);
+          callback(response: any) {
+            (async () => {
+              try {
+                await fetch("/api/confirm-booking", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    bookingId,
+                    paymentRef: response.reference,
+                    method: "paystack",
+                  }),
+                });
+                await refreshBookedTimes();
+                setConfirmed({
+                  bookingId,
+                  shortId,
+                  ref: response.reference,
+                  dateISO,
+                  time: selectedTime,
+                  total: totalWithMarkup,
+                  completionPin:
+                    saveData.completionPin || completionPin || undefined,
+                });
+                setStep(3);
+              } catch (err) {
+                console.error("Paystack callback error", err);
+                alert(
+                  "Payment processed, but we could not confirm the booking automatically. Please check your bookings page.",
+                );
+              }
+            })();
           },
           onClose: () => {},
         });
@@ -573,6 +629,16 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
             bookingId,
           }),
         });
+
+        // 🔍 If init fails, stop spinner & surface error
+        if (!mpesaRes.ok) {
+          setMpesaPending(false);
+          const errText = await mpesaRes.text().catch(() => "");
+          throw new Error(
+            errText || "Failed to start M-Pesa payment. Please try again.",
+          );
+        }
+
         await mpesaRes.text();
         waitForBookingConfirmation(bookingId, dateISO);
       }
@@ -903,14 +969,15 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
                         </label>
                         <input
                           type="tel"
-                          placeholder="2547XXXXXXXX"
+                          placeholder="07XXXXXXXX or +2547XXXXXXXX"
                           className="w-full border rounded px-2 py-1 mt-2"
                           value={mpesaPhone}
                           onChange={(e) => setMpesaPhone(e.target.value)}
                           disabled={mpesaPending}
                         />
                         <p className="text-xs text-gray-600 mt-1">
-                          Use format 2547XXXXXXXX (no + sign)
+                          You can enter 07XXXXXXXX, 7XXXXXXXX, 2547XXXXXXXX or
+                          +2547XXXXXXXX. We&apos;ll format it automatically.
                         </p>
                       </div>
                     )}

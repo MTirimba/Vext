@@ -110,12 +110,20 @@ export default function ProviderDashboard() {
     getDoc(userRef).then((snap) => {
       if (snap.exists()) {
         const data = snap.data() as any;
-        if (data.payout_method === 'mpesa' && data.payout_phone) {
+        const hasSettings = data.payout_method === 'mpesa' && !!data.payout_phone;
+        console.log('[PROVIDER_DASHBOARD] Payout settings loaded:', {
+          userId: user.uid,
+          payout_method: data.payout_method,
+          payout_phone: data.payout_phone,
+          hasSettings,
+        });
+        if (hasSettings) {
           setHasPayoutSettings(true);
         } else {
           setHasPayoutSettings(false);
         }
       } else {
+        console.warn('[PROVIDER_DASHBOARD] No user doc while checking payout settings');
         setHasPayoutSettings(false);
       }
     });
@@ -194,10 +202,15 @@ export default function ProviderDashboard() {
         const data = d.data();
         return sum + providerShare(data);
       }, 0);
+      console.log('[PROVIDER_DASHBOARD] Bookings snapshot for earnings:', {
+        count: snap.size,
+        totalEarnings,
+      });
       setBalance(totalEarnings - totalWithdrawn);
     });
 
     const unsubWithdrawals = onSnapshot(qWithdrawals, (snap) => {
+      const raw = snap.docs.map((d) => d.data());
       totalWithdrawn = snap.docs
         .filter((d) =>
           ['completed', 'success'].includes(
@@ -205,6 +218,13 @@ export default function ProviderDashboard() {
           ),
         )
         .reduce((sum, d) => sum + (d.data().amount || 0), 0);
+
+      console.log('[PROVIDER_DASHBOARD] Withdrawals snapshot:', {
+        totalDocs: snap.size,
+        docs: raw,
+        totalWithdrawn,
+        resultingBalance: totalEarnings - totalWithdrawn,
+      });
 
       setBalance(totalEarnings - totalWithdrawn);
       setLoading(false);
@@ -244,6 +264,12 @@ export default function ProviderDashboard() {
           }
         });
 
+        console.log('[PROVIDER_DASHBOARD] Loaded pending payouts:', {
+          bookingsCount: snap.size,
+          pendingCount: pending.length,
+          pendingTotal: total,
+        });
+
         setPendingEarnings(Math.round(total * 100) / 100);
         setPendingBookings(pending);
       } catch (err) {
@@ -262,6 +288,10 @@ export default function ProviderDashboard() {
         // All bookings for this provider
         const bookingsSnap = await getDocs(
           query(collection(db, 'bookings'), where('providerId', '==', user.uid)),
+        );
+        console.log(
+          '[PROVIDER_DASHBOARD] Stats bookings snapshot size:',
+          bookingsSnap.size,
         );
 
         const summary: BookingSummary = {
@@ -325,12 +355,18 @@ export default function ProviderDashboard() {
           }
         });
 
+        console.log('[PROVIDER_DASHBOARD] Booking summary:', summary);
+
         setBookingSummary(summary);
         setLostRevenue(Math.round(lost * 100) / 100);
 
         // Followers
         const followersSnap = await getDocs(
           collection(db, 'users', user.uid, 'followers'),
+        );
+        console.log(
+          '[PROVIDER_DASHBOARD] Followers count:',
+          followersSnap.size,
         );
         setFollowersCount(followersSnap.size);
 
@@ -396,6 +432,10 @@ export default function ProviderDashboard() {
     return <p className="p-6">Loading balance…</p>;
 
   const handleWithdrawClick = () => {
+    console.log('[PROVIDER_DASHBOARD] Withdraw button clicked', {
+      hasPayoutSettings,
+      balance,
+    });
     if (hasPayoutSettings) {
       setShowWithdraw(true);
     } else {

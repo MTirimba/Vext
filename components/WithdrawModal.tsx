@@ -62,19 +62,28 @@ export default function WithdrawModal({ available, onClose }: WithdrawModalProps
 
     (async () => {
       try {
+        console.log('[WITHDRAW_MODAL] Loading user payout profile for', user.uid);
         const snap = await getDoc(doc(db, 'users', user.uid));
         if (snap.exists()) {
           const d = snap.data() as any;
           const raw = d.payout_phone || d.phone;
           const normalized = normalizeToE164(raw);
+          console.log('[WITHDRAW_MODAL] Loaded payout data:', {
+            rawPhone: raw,
+            normalizedPhone: normalized,
+          });
           if (normalized) setPhoneNumber(normalized);
 
           // 🔐 existing PIN on profile (plain for now)
           if (typeof d.withdrawPin === 'string' && d.withdrawPin.trim().length > 0) {
+            console.log('[WITHDRAW_MODAL] Existing withdrawPin found on profile');
             setStoredWithdrawPin(d.withdrawPin.trim());
           } else {
+            console.log('[WITHDRAW_MODAL] No withdrawPin set on profile');
             setStoredWithdrawPin(null);
           }
+        } else {
+          console.warn('[WITHDRAW_MODAL] No user document found for', user.uid);
         }
       } catch (err) {
         console.error('Failed to load payout phone / withdraw PIN:', err);
@@ -127,6 +136,12 @@ export default function WithdrawModal({ available, onClose }: WithdrawModalProps
     try {
       setSubmitting(true);
 
+      console.log('[WITHDRAW_MODAL] Submitting withdrawal request', {
+        userId: user.uid,
+        amountNumber,
+        phoneNumber,
+      });
+
       // 1) Call our B2C API
       const resp = await fetch('/api/mpesa/b2c', {
         method: 'POST',
@@ -137,28 +152,56 @@ export default function WithdrawModal({ available, onClose }: WithdrawModalProps
         }),
       });
 
-      const data = await resp.json();
+      let data: any = null;
+      try {
+        data = await resp.json();
+      } catch (jsonErr) {
+        console.error('[WITHDRAW_MODAL] Failed to parse JSON from /api/mpesa/b2c:', jsonErr);
+      }
+
+      console.log('[WITHDRAW_MODAL] /api/mpesa/b2c response:', {
+        ok: resp.ok,
+        status: resp.status,
+        data,
+      });
 
       if (!resp.ok) {
         // 🔍 log the full object so we can see real M-Pesa error text
         console.error('B2C error full response:', data);
         setError(
-          data.error ||
+          (data && data.error) ||
             'Withdrawal failed. Please check your details and try again.'
         );
         setSubmitting(false);
         return;
       }
 
-      // 2) Record a withdrawal entry for history (basic)
+      // 2) Record a withdrawal entry for history (now with conversation IDs)
       try {
+        const mpesaResp = data && (data.mpesaResponse ?? data);
+
+        console.log('[WITHDRAW_MODAL] Recording withdrawal document with:', {
+          amount: amountNumber,
+          phoneNumber,
+          originatorConversationId: mpesaResp?.OriginatorConversationID ?? null,
+          conversationId: mpesaResp?.ConversationID ?? null,
+        });
+
         await addDoc(collection(db, 'users', user.uid, 'withdrawals'), {
           amount: amountNumber,
           phoneNumber,
-          status: 'initiated', // you can update this from callbacks later
+
+          // 🔴 IMPORTANT CHANGE: mark as success immediately so balance + history update
+          status: 'success', // was 'initiated'
+
           createdAt: serverTimestamp(),
           channel: 'mpesa-b2c',
-          rawMpesaResponse: data.mpesaResponse ?? data,
+
+          // 🔗 IDs to match in /api/mpesa/b2c/callback (still there if you later depend on callbacks)
+          originatorConversationId: mpesaResp?.OriginatorConversationID ?? null,
+          conversationId: mpesaResp?.ConversationID ?? null,
+
+          rawMpesaResponse: mpesaResp,
         });
       } catch (e) {
         console.error('Failed to record withdrawal document:', e);
@@ -196,6 +239,7 @@ export default function WithdrawModal({ available, onClose }: WithdrawModalProps
     }
 
     try {
+      console.log('[WITHDRAW_MODAL] Saving new withdrawPin for user', user.uid);
       await updateDoc(doc(db, 'users', user.uid), {
         withdrawPin: input,
       });
@@ -220,15 +264,20 @@ export default function WithdrawModal({ available, onClose }: WithdrawModalProps
 
     if (!storedWithdrawPin) {
       // Should not really happen, but if it does, just let them through
+      console.warn(
+        '[WITHDRAW_MODAL] No storedWithdrawPin found, allowing PIN verification by default'
+      );
       setPinVerified(true);
       return;
     }
 
     if (input !== storedWithdrawPin) {
+      console.warn('[WITHDRAW_MODAL] Incorrect withdrawal PIN entered');
       setPinError('Incorrect PIN. Please try again.');
       return;
     }
 
+    console.log('[WITHDRAW_MODAL] Withdrawal PIN verified');
     setPinVerified(true);
     setPinInput('');
   };
@@ -248,7 +297,7 @@ export default function WithdrawModal({ available, onClose }: WithdrawModalProps
         </div>
 
         <p className="text-sm text-gray-600 mb-4">
-          Available balance:{' '}
+          Available balance{' '}
           <span className="font-semibold text-emerald-700">
             KSH {available.toFixed(2)}
           </span>

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import {
   collection,
   query,
@@ -15,7 +15,7 @@ import { db, auth } from "@/lib/firebase";
 import { useAuthState } from "react-firebase-hooks/auth";
 import Calendar from "react-calendar";
 import "react-calendar/dist/Calendar.css";
-import { FaWhatsapp, FaPhoneAlt } from "react-icons/fa";
+import { FaWhatsapp, FaPhoneAlt, FaSortAmountDownAlt } from "react-icons/fa";
 import MessageButton from "@/components/MessageButton";
 
 interface Booking {
@@ -27,7 +27,16 @@ interface Booking {
   videoId?: string;
   date?: string;
   time?: string;
-  total?: number;
+
+  // 💰 Client-facing fields
+  total?: number; // client total (with markup)
+
+  // pricing extras (may or may not exist on every doc)
+  subtotal?: number; // provider base
+  markupAmount?: number; // fee amount
+  platformFee?: number; // alias for markup
+  providerAmount?: number; // provider share
+
   clientPhone?: string;
   providerPhone?: string;
   completionPin?: string; // 🔐 Service release PIN
@@ -67,6 +76,98 @@ interface UserProfile {
   lng?: number;
 }
 
+/**
+ * 💰 Always show what the client actually paid (with markup).
+ * Prefer `total`, but fall back to subtotal + fee if needed.
+ */
+function clientDisplayTotal(b: Booking): number | null {
+  // 1) Normal case – total is stored as client-charged amount
+  const t = Number(b.total);
+  if (!isNaN(t) && t > 0) {
+    return Math.round(t * 100) / 100;
+  }
+
+  // 2) If we have subtotal + markup/platformFee, reconstruct
+  const subtotal = Number(b.subtotal);
+  const markupAmount = Number(
+    b.markupAmount ??
+      b.platformFee ??
+      (b as any).fee ??
+      (b as any).serviceFee,
+  );
+  if (!isNaN(subtotal) && subtotal > 0) {
+    const fee = !isNaN(markupAmount) && markupAmount >= 0 ? markupAmount : 0;
+    const combined = subtotal + fee;
+    if (combined > 0) {
+      return Math.round(combined * 100) / 100;
+    }
+  }
+
+  // 3) As a last resort, if only providerAmount + platformFee exists
+  const providerAmount = Number(b.providerAmount);
+  const platformFee = Number(
+    b.platformFee ?? b.markupAmount ?? (b as any).fee,
+  );
+  if (!isNaN(providerAmount) && providerAmount > 0) {
+    const combined =
+      providerAmount +
+      (!isNaN(platformFee) && platformFee >= 0 ? platformFee : 0);
+    if (combined > 0) {
+      return Math.round(combined * 100) / 100;
+    }
+  }
+
+  return null;
+}
+
+/* ---------- Sorting helpers ---------- */
+
+type SortMode = "newest" | "oldest" | "id" | "cost";
+
+// Try to get a reasonable numeric "time" for sorting
+function bookingTimeValue(b: Booking): number {
+  // Prefer explicit date field
+  if (b.date) {
+    const d = new Date(b.date);
+    const t = d.getTime();
+    if (!isNaN(t)) return t;
+  }
+
+  // Fallback: createdAt if present (number or Firestore Timestamp)
+  const createdAt = (b as any).createdAt;
+  if (typeof createdAt === "number") return createdAt;
+  if (createdAt && typeof createdAt.toMillis === "function") {
+    return createdAt.toMillis();
+  }
+
+  return 0;
+}
+
+function compareBookings(a: Booking, b: Booking, mode: SortMode): number {
+  if (mode === "id") {
+    const idA = (a.shortId || a.id || "").toString();
+    const idB = (b.shortId || b.id || "").toString();
+    return idA.localeCompare(idB);
+  }
+
+  if (mode === "cost") {
+    const ta = clientDisplayTotal(a) ?? 0;
+    const tb = clientDisplayTotal(b) ?? 0;
+    // sort high → low
+    return tb - ta;
+  }
+
+  const ta = bookingTimeValue(a);
+  const tb = bookingTimeValue(b);
+
+  if (mode === "oldest") {
+    return ta - tb; // old → new
+  }
+
+  // default: newest
+  return tb - ta; // new → old
+}
+
 export default function ClientBookings() {
   const [user] = useAuthState(auth);
   const [active, setActive] = useState<
@@ -80,6 +181,10 @@ export default function ClientBookings() {
   >(null);
   const [newDate, setNewDate] = useState<Date>(new Date());
   const [newTime, setNewTime] = useState<string>("");
+
+  // 🔽 sorting state
+  const [sortMode, setSortMode] = useState<SortMode>("newest");
+  const [sortMenuOpen, setSortMenuOpen] = useState(false);
 
   useEffect(() => {
     if (!user) return;
@@ -134,6 +239,17 @@ export default function ClientBookings() {
       );
     })();
   }, [user]);
+
+  // derived sorted arrays
+  const sortedActive = useMemo(
+    () => [...active].sort((a, b) => compareBookings(a, b, sortMode)),
+    [active, sortMode],
+  );
+
+  const sortedCompleted = useMemo(
+    () => [...completed].sort((a, b) => compareBookings(a, b, sortMode)),
+    [completed, sortMode],
+  );
 
   const manageTimeSlot = async (
     providerId: string,
@@ -335,6 +451,9 @@ export default function ClientBookings() {
 
     const myNumber = b.clientPhone;
 
+    // 💰 compute what the client paid (with markup)
+    const totalPaid = clientDisplayTotal(b);
+
     return (
       <div className="border p-3 mb-3 rounded shadow">
         <div className="grid grid-cols-1 md:grid-cols-5 gap-4 items-start">
@@ -370,7 +489,8 @@ export default function ClientBookings() {
               <strong>Time:</strong> {b.time || "-"}
             </p>
             <p>
-              <strong>Total:</strong> KSHS {b.total ?? "-"}
+              <strong>Total Paid:</strong>{" "}
+              {totalPaid !== null ? `KSHS ${totalPaid}` : "—"}
             </p>
 
             {/* ⭐ show what the client wrote */}
@@ -508,11 +628,73 @@ export default function ClientBookings() {
 
   return (
     <div className="p-6">
-      <h1 className="text-2xl font-bold mb-4">My Bookings</h1>
+      {/* Header + sort control */}
+      <div className="flex items-center justify-between mb-4">
+        <h1 className="text-2xl font-bold">My Bookings</h1>
+
+        <div className="relative">
+          <button
+            type="button"
+            className="flex items-center gap-1 text-gray-600 hover:text-gray-900"
+            onClick={() => setSortMenuOpen((v) => !v)}
+            aria-label="Sort bookings"
+          >
+            <FaSortAmountDownAlt />
+            <span className="text-sm hidden sm:inline">
+              Sort
+              {sortMode === "newest" && " (Newest → Oldest)"}
+              {sortMode === "oldest" && " (Oldest → Newest)"}
+              {sortMode === "id" && " (Booking ID)"}
+              {sortMode === "cost" && " (Cost)"}
+            </span>
+          </button>
+
+          {sortMenuOpen && (
+            <div className="absolute right-0 mt-2 w-48 bg-white border rounded shadow-lg z-10 text-sm">
+              <button
+                className="block w-full text-left px-3 py-2 hover:bg-gray-100"
+                onClick={() => {
+                  setSortMode("newest");
+                  setSortMenuOpen(false);
+                }}
+              >
+                Newest → Oldest
+              </button>
+              <button
+                className="block w-full text-left px-3 py-2 hover:bg-gray-100"
+                onClick={() => {
+                  setSortMode("oldest");
+                  setSortMenuOpen(false);
+                }}
+              >
+                Oldest → Newest
+              </button>
+              <button
+                className="block w-full text-left px-3 py-2 hover:bg-gray-100"
+                onClick={() => {
+                  setSortMode("id");
+                  setSortMenuOpen(false);
+                }}
+              >
+                Booking ID
+              </button>
+              <button
+                className="block w-full text-left px-3 py-2 hover:bg-gray-100"
+                onClick={() => {
+                  setSortMode("cost");
+                  setSortMenuOpen(false);
+                }}
+              >
+                Total Cost
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
 
       <section className="mb-6">
         <h2 className="text-xl">Active / Pending</h2>
-        {active.map((b) => (
+        {sortedActive.map((b) => (
           <BookingCard
             key={b.id}
             b={b}
@@ -531,17 +713,17 @@ export default function ClientBookings() {
             }
           />
         ))}
-        {active.length === 0 && (
+        {sortedActive.length === 0 && (
           <p className="text-sm text-gray-600 mt-2">No active bookings.</p>
         )}
       </section>
 
       <section>
         <h2 className="text-xl">Completed & Past</h2>
-        {completed.map((b) => (
+        {sortedCompleted.map((b) => (
           <BookingCard key={b.id} b={b} />
         ))}
-        {completed.length === 0 && (
+        {sortedCompleted.length === 0 && (
           <p className="text-sm text-gray-600 mt-2">No completed bookings.</p>
         )}
       </section>

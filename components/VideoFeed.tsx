@@ -1177,14 +1177,14 @@ export default function VideoFeed() {
                       setNotificationsOpen(true);
                       setDropdownOpen(false);
                     }}
-                    className="block w-full px-2 py-1 hover:bg-gray-700 rounded mb-1 flex items-center"
+                    className="block w-full px-2 py-1 hover:bg-gray-700 rounded mb-1 flex items-center justify-between"
                   >
-                    <span className="relative inline-flex items-center gap-2 text-sm">
+                    <span className="inline-flex items-center gap-2 text-sm">
                       <FaBell className="text-xs" />
                       <span>Notifications</span>
                     </span>
                     {unreadCount > 0 && (
-                      <span className="absolute -top-1 -right-1 flex h-3 w-3 items-center justify-center rounded-full bg-green-500 text-[8px] font-semibold">
+                      <span className="ml-2 inline-flex items-center justify-center h-4 min-w-[16px] rounded-full bg-green-500 text-[10px] font-semibold px-1">
                         {unreadCount > 9 ? '9+' : unreadCount}
                       </span>
                     )}
@@ -1196,14 +1196,14 @@ export default function VideoFeed() {
                       router.push('/messages');
                       setDropdownOpen(false);
                     }}
-                    className="block w-full px-2 py-1 hover:bg-gray-700 rounded mb-1 flex items-center"
+                    className="block w-full px-2 py-1 hover:bg-gray-700 rounded mb-1 flex items-center justify-between"
                   >
-                    <span className="relative inline-flex items-center gap-2 text-sm">
+                    <span className="inline-flex items-center gap-2 text-sm">
                       <FaCommentDots className="text-xs" />
                       <span>Messages</span>
                     </span>
                     {unreadMessagesCount > 0 && (
-                      <span className="absolute -top-1 -right-1 flex h-3 w-3 items-center justify-center rounded-full bg-green-400 text-[8px] font-semibold">
+                      <span className="ml-2 inline-flex items-center justify-center h-4 min-w-[16px] rounded-full bg-green-400 text-[10px] font-semibold px-1">
                         {unreadMessagesCount > 1
                           ? unreadMessagesCount > 9
                             ? '9+'
