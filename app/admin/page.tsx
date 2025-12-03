@@ -1,6 +1,7 @@
+// /workspaces/Vext/app/admin/page.tsx
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useAdminGate } from '@/components/useAdminGate';
 import { db } from '@/lib/firebase';
 import {
@@ -13,16 +14,35 @@ import {
   getDocs,
   doc,
   getDoc,
+  setDoc,
 } from 'firebase/firestore';
 
-type TabKey = 'overview' | 'users' | 'creators' | 'bookings' | 'content' | 'finance';
+import {
+  DEFAULT_MARKUP_TIERS,
+  MarkupTier,
+  parseMarkupTiers,
+} from '@/lib/pricing';
+
+type TabKey =
+  | 'overview'
+  | 'users'
+  | 'creators'
+  | 'bookings'
+  | 'content'
+  | 'finance'
+  | 'markup';
 
 export default function AdminPage() {
   const gate = useAdminGate();
   const [active, setActive] = useState<TabKey>('overview');
 
   const [loading, setLoading] = useState(true);
-  const [kpi, setKpi] = useState({ users: 0, creators: 0, bookings: 0, gmv: 0 });
+  const [kpi, setKpi] = useState({
+    users: 0,
+    creators: 0,
+    bookings: 0,
+    gmv: 0,
+  });
   const [recentBookings, setRecentBookings] = useState<any[]>([]);
 
   // Per-tab data
@@ -30,6 +50,12 @@ export default function AdminPage() {
   const [creators, setCreators] = useState<any[]>([]);
   const [bookings, setBookings] = useState<any[]>([]);
   const [videos, setVideos] = useState<any[]>([]);
+
+  // Markup config
+  const [markupTiers, setMarkupTiers] =
+    useState<MarkupTier[]>(DEFAULT_MARKUP_TIERS);
+  const [markupLoading, setMarkupLoading] = useState(true);
+  const [markupSaving, setMarkupSaving] = useState(false);
 
   // ---------- Initial load: KPIs + recent bookings (with joined names)
   useEffect(() => {
@@ -41,15 +67,19 @@ export default function AdminPage() {
       const creatorsQ = query(usersRef, where('isProvider', '==', true));
       const bookingsRef = collection(db, 'bookings');
 
-      const [usersCountSnap, creatorsCountSnap, bookingsCountSnap] = await Promise.all([
-        getCountFromServer(usersRef),
-        getCountFromServer(creatorsQ),
-        getCountFromServer(bookingsRef),
-      ]);
+      const [usersCountSnap, creatorsCountSnap, bookingsCountSnap] =
+        await Promise.all([
+          getCountFromServer(usersRef),
+          getCountFromServer(creatorsQ),
+          getCountFromServer(bookingsRef),
+        ]);
 
       // GMV (no orderBy to avoid composite index requirement)
-      // Sum totals for accepted/completed
-      const gmvQ = query(bookingsRef, where('status', 'in', ['accepted', 'completed']));
+      // Sum totals for confirmed/completed (paid volume)
+      const gmvQ = query(
+        bookingsRef,
+        where('status', 'in', ['confirmed', 'completed']),
+      );
       const gmvSnap = await getDocs(gmvQ);
       let gmv = 0;
       gmvSnap.forEach((d) => {
@@ -58,9 +88,16 @@ export default function AdminPage() {
       });
 
       // Recent bookings (unfiltered → safe to order by createdAt)
-      const recentQ = query(bookingsRef, orderBy('createdAt', 'desc'), limit(8));
+      const recentQ = query(
+        bookingsRef,
+        orderBy('createdAt', 'desc'),
+        limit(8),
+      );
       const recentSnap = await getDocs(recentQ);
-      const rawRecent = recentSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      const rawRecent = recentSnap.docs.map((d) => ({
+        id: d.id,
+        ...d.data(),
+      }));
 
       // Join client/provider names
       const joinIds = new Set<string>();
@@ -74,7 +111,7 @@ export default function AdminPage() {
         Array.from(joinIds).map(async (uid) => {
           const us = await getDoc(doc(db, 'users', uid));
           if (us.exists()) nameCache[uid] = us.data();
-        })
+        }),
       );
 
       const enrichedRecent = rawRecent.map((b: any) => ({
@@ -103,20 +140,60 @@ export default function AdminPage() {
     })();
   }, [gate]);
 
-  // ---------- Lazy-load per tab
+  // ---------- Load pricing / markup config ----------
+  useEffect(() => {
+    if (gate !== 'ok') return;
+
+    (async () => {
+      try {
+        const snap = await getDoc(doc(db, 'config', 'pricing'));
+        if (snap.exists()) {
+          const data = snap.data() as any;
+          setMarkupTiers(parseMarkupTiers(data.tiers));
+        } else {
+          setMarkupTiers(DEFAULT_MARKUP_TIERS);
+        }
+      } catch (err) {
+        console.error('admin pricing config load error', err);
+        setMarkupTiers(DEFAULT_MARKUP_TIERS);
+      } finally {
+        setMarkupLoading(false);
+      }
+    })();
+  }, [gate]);
+
+  // ---------- Lazy-load per tab ----------
   useEffect(() => {
     if (gate !== 'ok') return;
     (async () => {
       if (active === 'users') {
-        const snap = await getDocs(query(collection(db, 'users'), orderBy('createdAt', 'desc'), limit(25)));
+        const snap = await getDocs(
+          query(
+            collection(db, 'users'),
+            orderBy('createdAt', 'desc'),
+            limit(25),
+          ),
+        );
         setUsers(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
       }
       if (active === 'creators') {
-        const snap = await getDocs(query(collection(db, 'users'), where('isProvider', '==', true), limit(25)));
+        const snap = await getDocs(
+          query(
+            collection(db, 'users'),
+            where('isProvider', '==', true),
+            limit(25),
+          ),
+        );
         setCreators(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
       }
       if (active === 'bookings') {
-        const snap = await getDocs(query(collection(db, 'bookings'), orderBy('createdAt', 'desc'), limit(25)));
+        const snap = await getDocs(
+          query(
+            collection(db, 'bookings'),
+            orderBy('createdAt', 'desc'),
+            limit(25),
+          ),
+        );
         const raw = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
         const ids = new Set<string>();
         raw.forEach((b: any) => {
@@ -128,7 +205,7 @@ export default function AdminPage() {
           Array.from(ids).map(async (uid) => {
             const us = await getDoc(doc(db, 'users', uid));
             if (us.exists()) cache[uid] = us.data();
-          })
+          }),
         );
         const enriched = raw.map((b: any) => ({
           ...b,
@@ -147,7 +224,13 @@ export default function AdminPage() {
         setBookings(enriched);
       }
       if (active === 'content') {
-        const snap = await getDocs(query(collection(db, 'videos'), orderBy('createdAt', 'desc'), limit(25)));
+        const snap = await getDocs(
+          query(
+            collection(db, 'videos'),
+            orderBy('createdAt', 'desc'),
+            limit(25),
+          ),
+        );
         const vids = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
         const ids = new Set<string>();
         vids.forEach((v: any) => v.userId && ids.add(v.userId));
@@ -156,7 +239,7 @@ export default function AdminPage() {
           Array.from(ids).map(async (uid) => {
             const us = await getDoc(doc(db, 'users', uid));
             if (us.exists()) cache[uid] = us.data();
-          })
+          }),
         );
         const enriched = vids.map((v: any) => ({
           ...v,
@@ -176,26 +259,81 @@ export default function AdminPage() {
   if (gate === 'signedout') return <p>Please sign in to access admin.</p>;
   if (gate === 'forbidden') return <p>Forbidden: admin access required.</p>;
 
-  // Finance derived numbers (assuming +10% markup included in GMV)
-  const appRevenue = Math.round(kpi.gmv * (10 / 110)); // platform 10% of client-paid total
+  // Finance derived numbers – approximate using blended markup from tiers
+  const blendedMarkupPercent = useMemo(() => {
+    const valid = markupTiers.filter((t) => Number.isFinite(t.percent));
+    if (!valid.length) return 10;
+    const sum = valid.reduce((acc, t) => acc + t.percent, 0);
+    return sum / valid.length;
+  }, [markupTiers]);
+
+  const appRevenue = Math.round(
+    kpi.gmv * (blendedMarkupPercent / (100 + blendedMarkupPercent)),
+  );
   const providerEarnings = Math.max(0, kpi.gmv - appRevenue);
+
+  const handleSaveMarkup = async () => {
+    try {
+      setMarkupSaving(true);
+      await setDoc(
+        doc(db, 'config', 'pricing'),
+        { tiers: markupTiers },
+        { merge: true },
+      );
+      alert('Markup settings saved.');
+    } catch (err) {
+      console.error('save markup error', err);
+      alert('Could not save markup settings. Please try again.');
+    } finally {
+      setMarkupSaving(false);
+    }
+  };
 
   return (
     <div>
       {/* Page-level tabs only (layout nav removed) */}
       <div className="mb-4 flex items-center gap-2">
-        <TabButton active={active === 'overview'} onClick={() => setActive('overview')} label="Overview" />
-        <TabButton active={active === 'users'} onClick={() => setActive('users')} label="Users" />
-        <TabButton active={active === 'creators'} onClick={() => setActive('creators')} label="Creators" />
-        <TabButton active={active === 'bookings'} onClick={() => setActive('bookings')} label="Bookings" />
-        <TabButton active={active === 'content'} onClick={() => setActive('content')} label="Content" />
-        <TabButton active={active === 'finance'} onClick={() => setActive('finance')} label="Finance" />
+        <TabButton
+          active={active === 'overview'}
+          onClick={() => setActive('overview')}
+          label="Overview"
+        />
+        <TabButton
+          active={active === 'users'}
+          onClick={() => setActive('users')}
+          label="Users"
+        />
+        <TabButton
+          active={active === 'creators'}
+          onClick={() => setActive('creators')}
+          label="Creators"
+        />
+        <TabButton
+          active={active === 'bookings'}
+          onClick={() => setActive('bookings')}
+          label="Bookings"
+        />
+        <TabButton
+          active={active === 'content'}
+          onClick={() => setActive('content')}
+          label="Content"
+        />
+        <TabButton
+          active={active === 'finance'}
+          onClick={() => setActive('finance')}
+          label="Finance"
+        />
+        <TabButton
+          active={active === 'markup'}
+          onClick={() => setActive('markup')}
+          label="Markup"
+        />
       </div>
 
       {/* Dynamic content area */}
       {active === 'overview' && (
         <div>
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 mb-6">
+          <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-4">
             <KpiCard label="Users" value={kpi.users} />
             <KpiCard label="Creators" value={kpi.creators} />
             <KpiCard label="Bookings" value={kpi.bookings} />
@@ -206,23 +344,37 @@ export default function AdminPage() {
             <p>Loading…</p>
           ) : (
             <>
-              <h2 className="text-xl font-semibold mb-3">Recent bookings</h2>
+              <h2 className="mb-3 text-xl font-semibold">Recent bookings</h2>
               <div className="space-y-2">
                 {recentBookings.map((b) => (
-                  <div key={b.id} className="border rounded p-3 flex items-center justify-between">
+                  <div
+                    key={b.id}
+                    className="flex items-center justify-between rounded border p-3"
+                  >
                     <div className="text-sm">
-                      <div className="font-semibold">#{b.shortId || b.id}</div>
+                      <div className="font-semibold">
+                        #{b.shortId || b.id}
+                      </div>
                       <div className="text-gray-800">
-                        <span className="font-medium">{b.clientName}</span>
-                        {' '}→{' '}
-                        <span className="font-medium">{b.providerName}</span>
+                        <span className="font-medium">
+                          {b.clientName}
+                        </span>{' '}
+                        →{' '}
+                        <span className="font-medium">
+                          {b.providerName}
+                        </span>
                       </div>
                       <div className="text-gray-600">
-                        {b.date ? new Date(b.date).toLocaleString() : '-'} • {b.status || 'pending'}
+                        {b.date
+                          ? new Date(b.date).toLocaleString()
+                          : '-'}{' '}
+                        • {b.status || 'pending'}
                       </div>
                     </div>
                     <div className="text-right text-sm">
-                      <div>KSHS {Number(b.total || 0).toLocaleString()}</div>
+                      <div>
+                        KSHS {Number(b.total || 0).toLocaleString()}
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -234,11 +386,11 @@ export default function AdminPage() {
 
       {active === 'users' && (
         <div>
-          <h2 className="text-xl font-semibold mb-3">Users (latest)</h2>
+          <h2 className="mb-3 text-xl font-semibold">Users (latest)</h2>
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead>
-                <tr className="text-left border-b">
+                <tr className="border-b text-left">
                   <th className="py-2 pr-4">Full Name</th>
                   <th className="py-2 pr-4">Username</th>
                   <th className="py-2 pr-4">Email</th>
@@ -249,11 +401,21 @@ export default function AdminPage() {
               <tbody>
                 {users.map((u) => (
                   <tr key={u.id} className="border-b last:border-0">
-                    <td className="py-2 pr-4">{u.fullName || u.name || '-'}</td>
-                    <td className="py-2 pr-4">{u.username || '-'}</td>
-                    <td className="py-2 pr-4">{u.email || '-'}</td>
-                    <td className="py-2 pr-4">{u.role || '-'}</td>
-                    <td className="py-2 pr-4">{u.isProvider ? 'Yes' : 'No'}</td>
+                    <td className="py-2 pr-4">
+                      {u.fullName || u.name || '-'}
+                    </td>
+                    <td className="py-2 pr-4">
+                      {u.username || '-'}
+                    </td>
+                    <td className="py-2 pr-4">
+                      {u.email || '-'}
+                    </td>
+                    <td className="py-2 pr-4">
+                      {u.role || '-'}
+                    </td>
+                    <td className="py-2 pr-4">
+                      {u.isProvider ? 'Yes' : 'No'}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -264,11 +426,11 @@ export default function AdminPage() {
 
       {active === 'creators' && (
         <div>
-          <h2 className="text-xl font-semibold mb-3">Creators</h2>
+          <h2 className="mb-3 text-xl font-semibold">Creators</h2>
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead>
-                <tr className="text-left border-b">
+                <tr className="border-b text-left">
                   <th className="py-2 pr-4">Business / Name</th>
                   <th className="py-2 pr-4">Username</th>
                   <th className="py-2 pr-4">Phone</th>
@@ -278,10 +440,19 @@ export default function AdminPage() {
               <tbody>
                 {creators.map((u) => (
                   <tr key={u.id} className="border-b last:border-0">
-                    <td className="py-2 pr-4">{u.businessName || u.fullName || u.name || '-'}</td>
-                    <td className="py-2 pr-4">{u.username || '-'}</td>
-                    <td className="py-2 pr-4">{u.businessPhone || u.phone || '-'}</td>
-                    <td className="py-2 pr-4">{[u.town, u.county].filter(Boolean).join(', ') || '-'}</td>
+                    <td className="py-2 pr-4">
+                      {u.businessName || u.fullName || u.name || '-'}
+                    </td>
+                    <td className="py-2 pr-4">
+                      {u.username || '-'}
+                    </td>
+                    <td className="py-2 pr-4">
+                      {u.businessPhone || u.phone || '-'}
+                    </td>
+                    <td className="py-2 pr-4">
+                      {[u.town, u.county].filter(Boolean).join(', ') ||
+                        '-'}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -292,23 +463,39 @@ export default function AdminPage() {
 
       {active === 'bookings' && (
         <div>
-          <h2 className="text-xl font-semibold mb-3">Bookings (latest)</h2>
+          <h2 className="mb-3 text-xl font-semibold">
+            Bookings (latest)
+          </h2>
           <div className="space-y-2">
             {bookings.map((b) => (
-              <div key={b.id} className="border rounded p-3 flex items-center justify-between">
+              <div
+                key={b.id}
+                className="flex items-center justify-between rounded border p-3"
+              >
                 <div className="text-sm">
-                  <div className="font-semibold">#{b.shortId || b.id}</div>
+                  <div className="font-semibold">
+                    #{b.shortId || b.id}
+                  </div>
                   <div className="text-gray-800">
-                    <span className="font-medium">{b.clientName}</span>
-                    {' '}→{' '}
-                    <span className="font-medium">{b.providerName}</span>
+                    <span className="font-medium">
+                      {b.clientName}
+                    </span>{' '}
+                    →{' '}
+                    <span className="font-medium">
+                      {b.providerName}
+                    </span>
                   </div>
                   <div className="text-gray-600">
-                    {b.date ? new Date(b.date).toLocaleString() : '-'} • {b.status || 'pending'}
+                    {b.date
+                      ? new Date(b.date).toLocaleString()
+                      : '-'}{' '}
+                    • {b.status || 'pending'}
                   </div>
                 </div>
                 <div className="text-right text-sm">
-                  <div>KSHS {Number(b.total || 0).toLocaleString()}</div>
+                  <div>
+                    KSHS {Number(b.total || 0).toLocaleString()}
+                  </div>
                 </div>
               </div>
             ))}
@@ -318,11 +505,13 @@ export default function AdminPage() {
 
       {active === 'content' && (
         <div>
-          <h2 className="text-xl font-semibold mb-3">Content (latest)</h2>
+          <h2 className="mb-3 text-xl font-semibold">
+            Content (latest)
+          </h2>
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead>
-                <tr className="text-left border-b">
+                <tr className="border-b text-left">
                   <th className="py-2 pr-4">Title</th>
                   <th className="py-2 pr-4">Owner</th>
                   <th className="py-2 pr-4">Created</th>
@@ -331,9 +520,17 @@ export default function AdminPage() {
               <tbody>
                 {videos.map((v) => (
                   <tr key={v.id} className="border-b last:border-0">
-                    <td className="py-2 pr-4">{v.title || '-'}</td>
-                    <td className="py-2 pr-4">{v.ownerName || v.userId}</td>
-                    <td className="py-2 pr-4">{v.createdAt ? new Date(v.createdAt).toLocaleString() : '-'}</td>
+                    <td className="py-2 pr-4">
+                      {v.title || '-'}
+                    </td>
+                    <td className="py-2 pr-4">
+                      {v.ownerName || v.userId}
+                    </td>
+                    <td className="py-2 pr-4">
+                      {v.createdAt
+                        ? new Date(v.createdAt).toLocaleString()
+                        : '-'}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -344,16 +541,143 @@ export default function AdminPage() {
 
       {active === 'finance' && (
         <div>
-          <h2 className="text-xl font-semibold mb-3">Finance</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <KpiCard label="GMV (KSHS)" value={kpi.gmv.toLocaleString()} />
-            <KpiCard label="App revenue (KSHS)" value={appRevenue.toLocaleString()} />
-            <KpiCard label="Provider earnings (KSHS)" value={providerEarnings.toLocaleString()} />
+          <h2 className="mb-3 text-xl font-semibold">Finance</h2>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <KpiCard
+              label="GMV (KSHS)"
+              value={kpi.gmv.toLocaleString()}
+            />
+            <KpiCard
+              label="App revenue (KSHS)"
+              value={appRevenue.toLocaleString()}
+            />
+            <KpiCard
+              label="Provider earnings (KSHS)"
+              value={providerEarnings.toLocaleString()}
+            />
           </div>
-          <p className="text-sm text-gray-600 mt-4">
-            App revenue is estimated as <code>GMV × 10/110</code> assuming the client price includes a +10% platform
-            markup and providers keep the full base price. If you later store <code>platformFee</code> per booking,
-            we’ll sum that directly instead of estimating.
+          <p className="mt-4 text-sm text-gray-600">
+            App revenue is currently estimated using the active markup
+            tiers (blended rate ≈{' '}
+            {blendedMarkupPercent.toFixed(1)}
+            %). It assumes client prices already include markup and
+            providers keep the full base price. If you later store a{' '}
+            <code>platformFee</code> per booking, we’ll sum that
+            directly instead of estimating.
+          </p>
+        </div>
+      )}
+
+      {active === 'markup' && (
+        <div>
+          <h2 className="mb-3 text-xl font-semibold">
+            Markup settings
+          </h2>
+          <p className="mb-4 text-sm text-gray-600">
+            These tiers control how much the app adds on top of
+            providers&apos; base prices. Clients see the marked-up
+            price; providers receive the base amount they set.
+          </p>
+
+          {markupLoading ? (
+            <p>Loading markup settings…</p>
+          ) : (
+            <div className="mb-4 overflow-x-auto">
+              <table className="min-w-full border text-sm">
+                <thead>
+                  <tr className="bg-gray-50 text-left">
+                    <th className="border-r px-3 py-2">Tier</th>
+                    <th className="border-r px-3 py-2">
+                      Min base (KSHS)
+                    </th>
+                    <th className="border-r px-3 py-2">
+                      Max base (KSHS)
+                    </th>
+                    <th className="px-3 py-2">Markup %</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {markupTiers.map((tier, idx) => (
+                    <tr key={idx} className="border-t">
+                      <td className="border-r px-3 py-2">
+                        #{idx + 1}
+                      </td>
+                      <td className="border-r px-3 py-2">
+                        <input
+                          type="number"
+                          className="w-full rounded border px-2 py-1 text-sm"
+                          value={tier.min}
+                          min={0}
+                          onChange={(e) => {
+                            const val = Number(e.target.value) || 0;
+                            setMarkupTiers((prev) =>
+                              prev.map((t, i) =>
+                                i === idx ? { ...t, min: val } : t,
+                              ),
+                            );
+                          }}
+                        />
+                      </td>
+                      <td className="border-r px-3 py-2">
+                        <input
+                          type="number"
+                          className="w-full rounded border px-2 py-1 text-sm"
+                          value={tier.max ?? ''}
+                          min={0}
+                          onChange={(e) => {
+                            const val =
+                              e.target.value === ''
+                                ? null
+                                : Number(e.target.value) || 0;
+                            setMarkupTiers((prev) =>
+                              prev.map((t, i) =>
+                                i === idx ? { ...t, max: val } : t,
+                              ),
+                            );
+                          }}
+                          placeholder="No max"
+                        />
+                      </td>
+                      <td className="px-3 py-2">
+                        <input
+                          type="number"
+                          className="w-full rounded border px-2 py-1 text-sm"
+                          value={tier.percent}
+                          min={0}
+                          step={0.1}
+                          onChange={(e) => {
+                            const val = Number(e.target.value) || 0;
+                            setMarkupTiers((prev) =>
+                              prev.map((t, i) =>
+                                i === idx
+                                  ? { ...t, percent: val }
+                                  : t,
+                              ),
+                            );
+                          }}
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={handleSaveMarkup}
+            disabled={markupSaving || markupLoading}
+            className="rounded bg-black px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
+          >
+            {markupSaving ? 'Saving…' : 'Save markup settings'}
+          </button>
+
+          <p className="mt-4 text-xs text-gray-500">
+            Ranges are interpreted as{' '}
+            <code>min ≤ base price &lt; max</code>. Leave{' '}
+            <strong>max</strong> blank on the last tier to apply it to
+            all higher prices.
           </p>
         </div>
       )}
@@ -361,21 +685,39 @@ export default function AdminPage() {
   );
 }
 
-function TabButton({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
+function TabButton({
+  active,
+  onClick,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+}) {
   return (
     <button
       onClick={onClick}
-      className={`px-3 py-2 rounded ${active ? 'bg-black text-white' : 'bg-gray-200 hover:bg-gray-300'}`}
+      className={`px-3 py-2 rounded ${
+        active
+          ? 'bg-black text-white'
+          : 'bg-gray-200 hover:bg-gray-300'
+      }`}
     >
       {label}
     </button>
   );
 }
 
-function KpiCard({ label, value }: { label: string; value: number | string }) {
+function KpiCard({
+  label,
+  value,
+}: {
+  label: string;
+  value: number | string;
+}) {
   return (
-    <div className="p-4 rounded border bg-white">
-      <div className="text-gray-600 text-sm">{label}</div>
+    <div className="rounded border bg-white p-4">
+      <div className="text-sm text-gray-600">{label}</div>
       <div className="text-2xl font-bold">{value}</div>
     </div>
   );

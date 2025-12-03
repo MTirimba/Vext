@@ -61,6 +61,47 @@ type ConfirmedInfo = {
   completionPin?: string; // 🔐 PIN for service completion verification
 };
 
+/* ---------- Markup config (tiered pricing) ---------- */
+
+interface MarkupTier {
+  min: number;
+  max: number | null; // null = open-ended
+  percent: number; // e.g. 10 = 10%
+}
+
+interface MarkupConfig {
+  tiers: MarkupTier[];
+}
+
+// Default tiers if Firestore config is missing:
+// 0–1500      → 10%
+// 1500–5000   → 5%
+// 5000–10000  → 2.5%
+// 10000+      → 2%
+const DEFAULT_MARKUP_CONFIG: MarkupConfig = {
+  tiers: [
+    { min: 0, max: 1500, percent: 10 },
+    { min: 1500, max: 5000, percent: 5 },
+    { min: 5000, max: 10000, percent: 2.5 },
+    { min: 10000, max: null, percent: 2 },
+  ],
+};
+
+function resolveMarkupConfig(config?: MarkupConfig | null): MarkupConfig {
+  if (config && Array.isArray(config.tiers) && config.tiers.length > 0) {
+    return config;
+  }
+  return DEFAULT_MARKUP_CONFIG;
+}
+
+function getMarkupPercent(basePrice: number, config?: MarkupConfig | null) {
+  const cfg = resolveMarkupConfig(config);
+  const tier = cfg.tiers.find(
+    (t) => basePrice >= t.min && (t.max == null || basePrice <= t.max),
+  );
+  return tier ? t.percent : 0;
+}
+
 /* ---------- Provider schedule helpers ---------- */
 type DayMinutes = { start: number; end: number };
 type ScheduleMap = Partial<Record<number, DayMinutes>>;
@@ -190,11 +231,16 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
   // 🔐 holds the completion PIN from backend for this booking
   const [completionPin, setCompletionPin] = useState<string | null>(null);
 
+  // Markup config (loaded from Firestore)
+  const [markupConfig, setMarkupConfig] = useState<MarkupConfig | null>(null);
+
+  // ⭐ client's special instructions for this booking
+  const [clientInstructions, setClientInstructions] = useState("");
+
   // Pricing
-  const markupRate = 0.1;
   const base = video.serviceCost || 0;
   const addons = video.addons || [];
-  const withMarkup = (n: number) => Math.round(n * (1 + markupRate));
+
   const addonsRawTotal = Object.entries(addonSelections).reduce(
     (sum, [n, qty]) => {
       const addon = addons.find((a) => a.name === n);
@@ -202,14 +248,52 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
     },
     0,
   );
+
   const subtotalRaw = base + addonsRawTotal;
+
+  // Use base price to determine bracket; if base is 0, fall back to subtotal
+  const bracketBase = base > 0 ? base : subtotalRaw;
+  const markupPercent =
+    bracketBase > 0 ? getMarkupPercent(bracketBase, markupConfig) : 0;
+  const effectiveMarkupRate = markupPercent / 100;
+
+  const withMarkup = (n: number) => Math.round(n * (1 + effectiveMarkupRate));
+
   const totalWithMarkup = withMarkup(subtotalRaw);
   const baseForDisplay = withMarkup(base);
   const extrasForDisplay = withMarkup(addonsRawTotal);
+  const markupAmount = totalWithMarkup - Math.round(subtotalRaw);
 
   const specialInstructions = video.specialInstructions || "";
   const includes = video.serviceIncludes || [];
   const notProvided = video.notProvided || [];
+
+  // Load markup config from Firestore (config/pricing)
+  useEffect(() => {
+    (async () => {
+      try {
+        const snap = await getDoc(doc(db, "config", "pricing"));
+        if (snap.exists()) {
+          const data = snap.data() as any;
+          if (Array.isArray(data.tiers)) {
+            const tiers: MarkupTier[] = data.tiers.map((t: any) => ({
+              min: Number(t.min) || 0,
+              max:
+                typeof t.max === "number"
+                  ? t.max
+                  : t.max == null
+                  ? null
+                  : Number(t.max),
+              percent: Number(t.percent) || 0,
+            }));
+            setMarkupConfig({ tiers });
+          }
+        }
+      } catch (err) {
+        console.error("load markup config error", err);
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (u) => {
@@ -379,9 +463,14 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
         time: selectedTime,
         subtotal: Math.round(subtotalRaw * 100) / 100,
         total: totalWithMarkup,
-        markupRate,
-        markupAmount: totalWithMarkup - Math.round(subtotalRaw),
+        markupRate: effectiveMarkupRate, // fraction, e.g. 0.1
+        markupPercent, // for reporting / analytics
+        markupAmount, // approx. total markup in KSHS
         addons: addonSelections,
+        // ⭐ pass through client-facing info for backend
+        clientPhone: phone || null,
+        clientName: name || "",
+        clientInstructions: clientInstructions.trim() || undefined,
       };
 
       const saveRes = await fetch("/api/save-booking", {
@@ -556,10 +645,7 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
               Sign In / Sign Up
             </button>
             {authOpen && (
-              <AuthModal
-                open={authOpen}
-                onClose={() => setAuthOpen(false)}
-              />
+              <AuthModal open={authOpen} onClose={() => setAuthOpen(false)} />
             )}
           </div>
         ) : (
@@ -720,8 +806,7 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
                         const isBooked = bookedTimes.includes(t);
                         const isPast =
                           selectedDate.toDateString() ===
-                            new Date().toDateString() &&
-                          isTimeInPastToday(t);
+                            new Date().toDateString() && isTimeInPastToday(t);
                         const disabled = isBooked || isPast;
                         return (
                           <option key={t} value={t} disabled={disabled}>
@@ -755,6 +840,23 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
                       </div>
                     </div>
 
+                    {/* ⭐ Client special instructions to provider */}
+                    <div className="mt-4">
+                      <label className="block text-sm font-medium mb-1">
+                        Special instructions for your provider (optional)
+                      </label>
+                      <textarea
+                        className="w-full border rounded px-2 py-1 text-sm min-h-[80px]"
+                        placeholder="E.g. Bring your own tools, call when you arrive, I have allergies, etc."
+                        value={clientInstructions}
+                        onChange={(e) => setClientInstructions(e.target.value)}
+                      />
+                      <p className="text-xs text-gray-500 mt-1">
+                        This note will be shared with your provider together
+                        with your booking details.
+                      </p>
+                    </div>
+
                     <button
                       onClick={() => setStep(2)}
                       disabled={!selectedTime}
@@ -771,6 +873,15 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
                     <p className="mt-2 font-semibold">
                       Total: KSHS {totalWithMarkup}
                     </p>
+
+                    {clientInstructions.trim() && (
+                      <div className="mt-3 p-2 rounded bg-gray-50 border text-xs text-gray-800 whitespace-pre-wrap">
+                        <span className="font-semibold">
+                          Your note to the provider:
+                        </span>{" "}
+                        {clientInstructions}
+                      </div>
+                    )}
 
                     <select
                       className="w-full border rounded px-2 py-1 mt-2"

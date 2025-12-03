@@ -1,5 +1,5 @@
-'use client';
-import { useEffect, useState } from 'react';
+"use client";
+import { useEffect, useState } from "react";
 import {
   collection,
   query,
@@ -10,13 +10,13 @@ import {
   updateDoc,
   addDoc,
   getDoc,
-} from 'firebase/firestore';
-import { db, auth } from '@/lib/firebase';
-import { useAuthState } from 'react-firebase-hooks/auth';
-import Calendar from 'react-calendar';
-import 'react-calendar/dist/Calendar.css';
-import { FaWhatsapp, FaPhoneAlt } from 'react-icons/fa';
-import MessageButton from '@/components/MessageButton';
+} from "firebase/firestore";
+import { db, auth } from "@/lib/firebase";
+import { useAuthState } from "react-firebase-hooks/auth";
+import Calendar from "react-calendar";
+import "react-calendar/dist/Calendar.css";
+import { FaWhatsapp, FaPhoneAlt } from "react-icons/fa";
+import MessageButton from "@/components/MessageButton";
 
 interface Booking {
   id: string;
@@ -31,6 +31,9 @@ interface Booking {
   clientPhone?: string;
   providerPhone?: string;
   completionPin?: string; // 🔐 Service release PIN
+
+  clientInstructions?: string; // ⭐ client's own note
+
   [key: string]: any;
 }
 
@@ -76,13 +79,13 @@ export default function ClientBookings() {
     (Booking & { video?: Video; provider?: UserProfile }) | null
   >(null);
   const [newDate, setNewDate] = useState<Date>(new Date());
-  const [newTime, setNewTime] = useState<string>('');
+  const [newTime, setNewTime] = useState<string>("");
 
   useEffect(() => {
     if (!user) return;
     (async () => {
       const snap = await getDocs(
-        query(collection(db, 'bookings'), where('clientId', '==', user.uid)),
+        query(collection(db, "bookings"), where("clientId", "==", user.uid)),
       );
       const arr = await Promise.all(
         snap.docs.map(async (d) => {
@@ -90,7 +93,7 @@ export default function ClientBookings() {
 
           let video: Video | undefined;
           if (base.videoId) {
-            const vs = await getDoc(doc(db, 'videos', base.videoId));
+            const vs = await getDoc(doc(db, "videos", base.videoId));
             if (vs.exists()) {
               const v = vs.data() as any;
               video = {
@@ -106,7 +109,7 @@ export default function ClientBookings() {
 
           let provider: UserProfile | undefined;
           if (base.providerId) {
-            const ps = await getDoc(doc(db, 'users', base.providerId));
+            const ps = await getDoc(doc(db, "users", base.providerId));
             if (ps.exists()) provider = ps.data() as UserProfile;
           }
 
@@ -117,15 +120,15 @@ export default function ClientBookings() {
       // treat accepted/confirmed as active, and show rejected/cancelled in history
       setActive(
         (arr as any[]).filter((b) =>
-          ['pending', 'accepted', 'confirmed'].includes(
-            (b.status || '').toLowerCase(),
+          ["pending", "accepted", "confirmed"].includes(
+            (b.status || "").toLowerCase(),
           ),
         ),
       );
       setCompleted(
         (arr as any[]).filter((b) =>
-          ['completed', 'rejected', 'cancelled', 'canceled'].includes(
-            (b.status || '').toLowerCase(),
+          ["completed", "rejected", "cancelled", "canceled"].includes(
+            (b.status || "").toLowerCase(),
           ),
         ),
       );
@@ -138,17 +141,17 @@ export default function ClientBookings() {
     time: string,
     release = false,
   ) => {
-    const slotsRef = collection(db, 'providerSlots');
+    const slotsRef = collection(db, "providerSlots");
     const qy = query(
       slotsRef,
-      where('providerId', '==', providerId),
-      where('date', '==', date),
-      where('time', '==', time),
+      where("providerId", "==", providerId),
+      where("date", "==", date),
+      where("time", "==", time),
     );
     const snap = await getDocs(qy);
     if (release) {
       if (!snap.empty)
-        await deleteDoc(doc(db, 'providerSlots', snap.docs[0].id));
+        await deleteDoc(doc(db, "providerSlots", snap.docs[0].id));
     } else {
       if (snap.empty)
         await addDoc(slotsRef, {
@@ -158,7 +161,7 @@ export default function ClientBookings() {
           booked: true,
           createdAt: Date.now(),
         });
-      else throw new Error('This time slot is no longer available.');
+      else throw new Error("This time slot is no longer available.");
     }
   };
 
@@ -167,12 +170,12 @@ export default function ClientBookings() {
     const booking = active.find((b) => b.id === id);
     if (!booking) return;
 
-    if (!confirm('Are you sure you want to cancel this booking?')) return;
+    if (!confirm("Are you sure you want to cancel this booking?")) return;
 
     try {
-      const res = await fetch('/api/cancel-booking', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const res = await fetch("/api/cancel-booking", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           bookingId: id,
           clientId: user?.uid,
@@ -181,23 +184,23 @@ export default function ClientBookings() {
 
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.error || 'Failed to cancel booking.');
+        throw new Error(data.error || "Failed to cancel booking.");
       }
 
       // update UI lists
       setActive((prev) => prev.filter((b) => b.id !== id));
       setCompleted((prev) => [
         ...prev,
-        { ...(booking as any), status: 'cancelled' },
+        { ...(booking as any), status: "cancelled" },
       ]);
 
       alert(
         data.refunded
-          ? 'Booking cancelled. Any paid amount has been moved to your wallet.'
-          : 'Booking cancelled.',
+          ? "Booking cancelled. Any paid amount has been moved to your wallet."
+          : "Booking cancelled.",
       );
     } catch (err: any) {
-      alert(err.message || 'Error while cancelling. Please try again.');
+      alert(err.message || "Error while cancelling. Please try again.");
     }
   };
 
@@ -210,8 +213,8 @@ export default function ClientBookings() {
   };
 
   const confirmReschedule = async () => {
-    if (!rescheduling || !newTime) return alert('Select a new time');
-    const ref = doc(db, 'bookings', rescheduling.id);
+    if (!rescheduling || !newTime) return alert("Select a new time");
+    const ref = doc(db, "bookings", rescheduling.id);
     try {
       // release old slot
       await manageTimeSlot(
@@ -229,7 +232,7 @@ export default function ClientBookings() {
       await updateDoc(ref, {
         date: newDateISO,
         time: newTime,
-        status: 'pending',
+        status: "pending",
         rescheduledAt: Date.now(),
       });
 
@@ -242,9 +245,9 @@ export default function ClientBookings() {
       );
 
       // SMS both client & provider
-      await fetch('/api/send-sms', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      await fetch("/api/send-sms", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           to: [rescheduling.clientPhone, rescheduling.providerPhone].filter(
             Boolean,
@@ -257,62 +260,62 @@ export default function ClientBookings() {
 
       // 🔔 notify provider via backend
       try {
-        await fetch('/api/booking-change-notification', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+        await fetch("/api/booking-change-notification", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             bookingId: rescheduling.id,
-            changeType: 'rescheduled',
+            changeType: "rescheduled",
           }),
         });
       } catch (notifyErr) {
-        console.error('Failed to send reschedule notification:', notifyErr);
+        console.error("Failed to send reschedule notification:", notifyErr);
       }
 
       setRescheduling(null);
     } catch (err: any) {
-      alert(err.message || 'Error while rescheduling. Try another time.');
+      alert(err.message || "Error while rescheduling. Try another time.");
     }
   };
 
   const providerName = (p?: UserProfile) =>
-    p?.businessName || p?.fullName || p?.name || 'Service Provider';
+    p?.businessName || p?.fullName || p?.name || "Service Provider";
 
   const providerAddressLine = (p?: UserProfile) => {
-    if (!p) return '';
+    if (!p) return "";
     const parts = [p.street, p.town, p.county].filter(Boolean);
-    return parts.length ? parts.join(', ') : p.location || '';
+    return parts.length ? parts.join(", ") : p.location || "";
   };
 
   const providerVenueLine = (p?: UserProfile) => {
-    if (!p) return '';
+    if (!p) return "";
     const parts = [
-      p.building ? `Building: ${p.building}` : '',
-      p.floor ? `Floor: ${p.floor}` : '',
-      p.room ? `Room: ${p.room}` : '',
+      p.building ? `Building: ${p.building}` : "",
+      p.floor ? `Floor: ${p.floor}` : "",
+      p.room ? `Room: ${p.room}` : "",
     ].filter(Boolean);
-    return parts.join(' • ');
+    return parts.join(" • ");
   };
 
   const providerMapLink = (p?: UserProfile) => {
-    if (!p) return '';
-    if (typeof p.lat === 'number' && typeof p.lng === 'number') {
+    if (!p) return "";
+    if (typeof p.lat === "number" && typeof p.lng === "number") {
       return `https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lng}`;
     }
-    const text = providerAddressLine(p) || p.location || '';
+    const text = providerAddressLine(p) || p.location || "";
     return text
       ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
           text,
         )}`
-      : '';
+      : "";
   };
 
   // tel & WhatsApp helpers
-  const telHref = (n?: string) => (n ? `tel:${n.replace(/\s+/g, '')}` : '');
+  const telHref = (n?: string) => (n ? `tel:${n.replace(/\s+/g, "")}` : "");
   const waHref = (n?: string) => {
-    if (!n) return '';
-    const digits = n.replace(/[^\d]/g, '');
-    return digits ? `https://wa.me/${digits}` : '';
+    if (!n) return "";
+    const digits = n.replace(/[^\d]/g, "");
+    return digits ? `https://wa.me/${digits}` : "";
   };
 
   const BookingCard = ({
@@ -360,15 +363,25 @@ export default function ClientBookings() {
             )}
 
             <p>
-              <strong>Date:</strong>{' '}
-              {b.date ? new Date(b.date).toLocaleDateString() : '-'}
+              <strong>Date:</strong>{" "}
+              {b.date ? new Date(b.date).toLocaleDateString() : "-"}
             </p>
             <p>
-              <strong>Time:</strong> {b.time || '-'}
+              <strong>Time:</strong> {b.time || "-"}
             </p>
             <p>
-              <strong>Total:</strong> KSHS {b.total ?? '-'}
+              <strong>Total:</strong> KSHS {b.total ?? "-"}
             </p>
+
+            {/* ⭐ show what the client wrote */}
+            {b.clientInstructions && (
+              <div className="mt-2 p-2 rounded bg-gray-50 border text-xs text-gray-800 whitespace-pre-wrap">
+                <span className="font-semibold">
+                  Your note to the provider:
+                </span>{" "}
+                {b.clientInstructions}
+              </div>
+            )}
 
             {/* phones with icons + message button */}
             <div className="mt-3 space-y-1 text-sm">
@@ -428,6 +441,7 @@ export default function ClientBookings() {
                       aria-label="WhatsApp my number"
                     >
                       <FaWhatsapp className="text-green-600" />
+                    </a>
                   )}
                   <span className="text-gray-800">{myNumber}</span>
                 </div>
@@ -478,7 +492,7 @@ export default function ClientBookings() {
             ) : b.video?.thumbnailUrl || b.video?.imageUrl ? (
               <img
                 src={b.video.thumbnailUrl || b.video.imageUrl}
-                alt={b.video.title || 'Booking Media'}
+                alt={b.video.title || "Booking Media"}
                 className="w-full max-w-md h-64 md:h-80 lg:h-96 object-contain rounded bg-gray-100"
               />
             ) : (
@@ -545,15 +559,15 @@ export default function ClientBookings() {
             >
               <option value="">-- time --</option>
               {[
-                '09:00',
-                '10:00',
-                '11:00',
-                '12:00',
-                '13:00',
-                '14:00',
-                '15:00',
-                '16:00',
-                '17:00',
+                "09:00",
+                "10:00",
+                "11:00",
+                "12:00",
+                "13:00",
+                "14:00",
+                "15:00",
+                "16:00",
+                "17:00",
               ].map((t) => (
                 <option key={t} value={t}>
                   {t}

@@ -9,15 +9,13 @@ import {
   useHits,
 } from 'react-instantsearch-hooks-web';
 import { db } from '@/lib/firebase';
-import {
-  collection,
-  getDocs,
-} from 'firebase/firestore';
+import { collection, getDocs } from 'firebase/firestore';
 import { FaArrowLeft } from 'react-icons/fa';
+import { priceWithMarkup } from '@/lib/pricing';
 
 const searchClient = algoliasearch(
   process.env.NEXT_PUBLIC_ALGOLIA_APP_ID!,
-  process.env.NEXT_PUBLIC_ALGOLIA_SEARCH_KEY!
+  process.env.NEXT_PUBLIC_ALGOLIA_SEARCH_KEY!,
 );
 
 const ALGOLIA_INDEX =
@@ -182,16 +180,13 @@ function MediaHitsGrid({
       {effectiveHits.map((hit) => {
         const id = hit.id || hit.objectID;
         const thumb =
-          hit.coverUrl ||
-          (hit.media && hit.media[0]?.url) ||
-          hit.url ||
-          '';
+          hit.coverUrl || (hit.media && hit.media[0]?.url) || hit.url || '';
 
         const image = isImageUrl(thumb);
 
         const displayPrice =
           typeof hit.serviceCost === 'number'
-            ? Math.round(hit.serviceCost * 1.1)
+            ? priceWithMarkup(hit.serviceCost)
             : null;
 
         return (
@@ -275,10 +270,10 @@ function PeopleList({
             : p.profilePhoto || p.businessProfilePhoto;
 
         const personalHandle = normalizeHandle(
-          p.personalUsername || p.username
+          p.personalUsername || p.username,
         );
         const businessHandle = normalizeHandle(
-          p.businessUsername || personalHandle
+          p.businessUsername || personalHandle,
         );
         const handle =
           label === 'providers' ? businessHandle : personalHandle;
@@ -393,12 +388,12 @@ function SearchInner() {
 
   const filteredProviders = useMemo(
     () => allProviders.filter((p) => matchesUser(p, query)),
-    [allProviders, query]
+    [allProviders, query],
   );
 
   const filteredUsers = useMemo(
     () => allUsers.filter((u) => matchesUser(u, query)),
-    [allUsers, query]
+    [allUsers, query],
   );
 
   const providerIdsForFallback = filteredProviders.map((p) => p.id);

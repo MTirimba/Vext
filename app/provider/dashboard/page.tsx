@@ -80,7 +80,7 @@ export default function ProviderDashboard() {
   const [followersCount, setFollowersCount] = useState<number | null>(null);
   const [videoStats, setVideoStats] = useState<VideoStat[]>([]);
   const [loyalClients, setLoyalClients] = useState<ClientStat[]>([]);
-  const [lostRevenue, setLostRevenue] = useState(0); // NEW – refunded/lost value
+  const [lostRevenue, setLostRevenue] = useState(0); // refunded/lost value
 
   const mostBookedServices = useMemo(
     () =>
@@ -122,8 +122,13 @@ export default function ProviderDashboard() {
   }, [user]);
 
   // Helper to compute provider's take-home from a booking doc
-  // We prefer explicit base fields if present; otherwise we reverse the 10% markup.
+  // ✅ Works with tiered markup & wallet:
+  // 1) Prefer explicit providerAmount / base fields.
+  // 2) If platformFee / markupAmount is present, use total - fee.
+  // 3) If markupRate is present (fraction, e.g. 0.1), reverse that.
+  // 4) Fallback: assume no markup and treat total as provider share (dashboard-only approximation).
   const providerShare = (b: any): number => {
+    // 1) Explicit provider-side fields (what the provider should actually receive)
     const explicit = Number(
       b.providerAmount ??
         b.baseTotal ??
@@ -133,9 +138,35 @@ export default function ProviderDashboard() {
     );
     if (!isNaN(explicit) && explicit > 0) return explicit;
 
-    const total = Number(b.total) || 0; // assumed to be customer-charged (includes +10%)
-    // Reverse the +10% markup; keep two decimals.
-    return Math.round((total / 1.1) * 100) / 100;
+    const total = Number(b.total) || 0;
+    if (total <= 0) return 0;
+
+    // 2) If we know the platform fee or markupAmount, compute provider via difference
+    const feeLikeFields = ['platformFee', 'markupAmount'] as const;
+    for (const key of feeLikeFields) {
+      const fee = Number(b[key]);
+      if (!isNaN(fee) && fee > 0 && fee < total) {
+        const implied = total - fee;
+        if (implied > 0) {
+          return Math.round(implied * 100) / 100;
+        }
+      }
+    }
+
+    // 3) If we know the markupRate as a fraction (e.g. 0.1, 0.15), reverse it
+    if (!isNaN(Number(b.markupRate))) {
+      const rate = Number(b.markupRate);
+      if (rate > 0 && rate < 1) {
+        const implied = total / (1 + rate);
+        if (implied > 0) {
+          return Math.round(implied * 100) / 100;
+        }
+      }
+    }
+
+    // 4) Last resort: assume the provider gets the full total
+    // (this only affects dashboard display, not real payouts)
+    return Math.round(total * 100) / 100;
   };
 
   // ✅ Track earnings and withdrawals in real time (available balance – releaseVerified = true)
@@ -245,7 +276,7 @@ export default function ProviderDashboard() {
 
         const byVideo = new Map<string, number>();
         const byClient = new Map<string, number>();
-        let lost = 0; // NEW – provider-side value of refunded bookings
+        let lost = 0; // provider-side value of refunded bookings
 
         bookingsSnap.forEach((d) => {
           const data = d.data() as any;
@@ -318,7 +349,12 @@ export default function ProviderDashboard() {
               collection(db, 'videos', videoId, 'likes'),
             );
             likes = likesSnap.size;
-            videoStatList.push({ videoId, title, bookings: bookingsCount, likes });
+            videoStatList.push({
+              videoId,
+              title,
+              bookings: bookingsCount,
+              likes,
+            });
           } catch (e) {
             console.error('Error loading video stats for', videoId, e);
           }
@@ -476,7 +512,7 @@ export default function ProviderDashboard() {
             )}
           </div>
 
-          {/* NEW: Refunded / lost revenue card */}
+          {/* Refunded / lost revenue card */}
           <div className="p-4 bg-white shadow rounded mb-6">
             <h2 className="font-semibold text-gray-700">
               Refunded / Cancelled Bookings

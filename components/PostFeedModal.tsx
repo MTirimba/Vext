@@ -13,6 +13,7 @@ import {
   FiMoreHorizontal,
   FiX,
 } from 'react-icons/fi';
+import { DEFAULT_MARKUP_TIERS, MarkupTier } from '@/lib/pricing';
 
 type MediaItem = { url: string; type: 'image' | 'video' };
 type Addon = { name: string; cost: number; unit: string };
@@ -70,7 +71,11 @@ export function mapHref(p?: CreatorProfile) {
     return `https://www.google.com/maps?q=${p.lat},${p.lng}`;
   }
   const addr = buildAddress(p);
-  return addr ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addr)}` : '';
+  return addr
+    ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+        addr,
+      )}`
+    : '';
 }
 
 function firstMedia(v: VideoDoc): MediaItem | null {
@@ -79,6 +84,19 @@ function firstMedia(v: VideoDoc): MediaItem | null {
   if (!src) return null;
   const isImg = /\.(png|jpe?g|gif|webp|avif|bmp)$/i.test(src.split('?')[0]);
   return { url: src, type: isImg ? 'image' : 'video' };
+}
+
+// 💰 Helper: compute client-facing price from a base using markup tiers
+function priceWithMarkup(base: number, tiers: MarkupTier[] = DEFAULT_MARKUP_TIERS): number | null {
+  if (!Number.isFinite(base) || base <= 0) return null;
+  const tier =
+    tiers.find(
+      (t) => base >= t.min && (t.max == null || base < t.max),
+    ) || tiers[tiers.length - 1];
+
+  const percent = tier?.percent ?? 0;
+  const multiplier = 1 + percent / 100;
+  return Math.round(base * multiplier);
 }
 
 export function PostFeedModal({
@@ -152,12 +170,15 @@ export function PostFeedModal({
     const link = `${window.location.origin}/video/${videoId}`;
     navigator.clipboard.writeText(link).then(
       () => alert('Link copied to clipboard!'),
-      () => alert('❌ Could not copy link')
+      () => alert('❌ Could not copy link'),
     );
   };
 
-  const pricePlus10 = (v: VideoDoc) =>
-    typeof v.serviceCost === 'number' ? Math.round(v.serviceCost * 1.1) : null;
+  // ✅ Use tiered markup instead of flat +10%
+  const clientDisplayPrice = (v: VideoDoc) =>
+    typeof v.serviceCost === 'number'
+      ? priceWithMarkup(v.serviceCost)
+      : null;
 
   const address = useMemo(() => buildAddress(creatorProfile), [creatorProfile]);
   const maps = useMemo(() => mapHref(creatorProfile), [creatorProfile]);
@@ -200,7 +221,7 @@ export function PostFeedModal({
         <div className="max-w-3xl mx-auto py-8 space-y-10">
           {videos.map((v) => {
             const cover = firstMedia(v);
-            const price = pricePlus10(v);
+            const price = clientDisplayPrice(v);
             return (
               <div
                 key={v.id}
@@ -230,7 +251,9 @@ export function PostFeedModal({
                 <div className="px-4 py-3 flex items-start justify-between">
                   <div className="min-w-0 pr-3">
                     {v.title && (
-                      <div className="font-semibold text-sm truncate">{v.title}</div>
+                      <div className="font-semibold text-sm truncate">
+                        {v.title}
+                      </div>
                     )}
                     {v.description && (
                       <div className="text-xs text-gray-600 line-clamp-2">
@@ -257,7 +280,9 @@ export function PostFeedModal({
                       </div>
                     )}
                     {creatorProfile?.operatingHours && (
-                      <div className="text-xs text-gray-500">{creatorProfile.operatingHours}</div>
+                      <div className="text-xs text-gray-500">
+                        {creatorProfile.operatingHours}
+                      </div>
                     )}
 
                     {price !== null && (
@@ -292,7 +317,8 @@ export function PostFeedModal({
                       className="flex items-center gap-1 hover:opacity-75"
                       aria-label="Comment"
                     >
-                      <FiMessageCircle /> <span className="text-sm">Comment</span>
+                      <FiMessageCircle />{' '}
+                      <span className="text-sm">Comment</span>
                     </button>
                     <button
                       onClick={() => handleShare(v.id)}
@@ -319,7 +345,10 @@ export function PostFeedModal({
       )}
 
       {commentForId && (
-        <CommentModal videoId={commentForId} onClose={() => setCommentForId(null)} />
+        <CommentModal
+          videoId={commentForId}
+          onClose={() => setCommentForId(null)}
+        />
       )}
     </div>
   );

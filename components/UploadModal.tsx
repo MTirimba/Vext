@@ -102,6 +102,8 @@ export function UploadModal({ onClose }: Props) {
   // discovery metadata
   const [categoryId, setCategoryId] = useState<string>('');
   const [subcategoryId, setSubcategoryId] = useState<string>('');
+  // NEW: extra subcategories
+  const [extraSubcategoryIds, setExtraSubcategoryIds] = useState<string[]>([]);
 
   const [bestForGender, setBestForGender] = useState<GenderId | ''>('');
   const [bestForAgeGroup, setBestForAgeGroup] = useState<AgeGroupId | ''>('');
@@ -120,7 +122,8 @@ export function UploadModal({ onClose }: Props) {
     [categoryId],
   );
 
-  const subcategories: ServiceSubcategory[] = selectedCategory?.subcategories ?? [];
+  const subcategories: ServiceSubcategory[] =
+    selectedCategory?.subcategories ?? [];
 
   const selectedSubcategory: ServiceSubcategory | null = useMemo(
     () => subcategories.find((s) => s.id === subcategoryId) || null,
@@ -143,6 +146,7 @@ export function UploadModal({ onClose }: Props) {
   useEffect(() => {
     if (!selectedCategory) {
       setSubcategoryId('');
+      setExtraSubcategoryIds([]);
       setBestForGender('');
       setBestForAgeGroup('');
       setHairColorIds([]);
@@ -155,6 +159,13 @@ export function UploadModal({ onClose }: Props) {
     if (!subcategoryId && selectedCategory.subcategories.length > 0) {
       setSubcategoryId(selectedCategory.subcategories[0].id);
     }
+
+    // keep extras in range of this category
+    setExtraSubcategoryIds((prev) =>
+      prev.filter((id) =>
+        selectedCategory.subcategories.some((s) => s.id === id),
+      ),
+    );
   }, [selectedCategory, subcategoryId]);
 
   // When subcategory changes, apply default gender/age if those fields are still blank
@@ -201,6 +212,15 @@ export function UploadModal({ onClose }: Props) {
     setNailShapeIds((prev) =>
       prev.includes(id) ? prev.filter((v) => v !== id) : [...prev, id],
     );
+  };
+
+  const toggleExtraSubcategory = (id: string) => {
+    setExtraSubcategoryIds((prev) => {
+      if (prev.includes(id)) {
+        return prev.filter((x) => x !== id);
+      }
+      return [...prev, id];
+    });
   };
 
   // ------------------ helpers for existing features ------------------
@@ -331,6 +351,20 @@ export function UploadModal({ onClose }: Props) {
       const resolvedAgeGroup: AgeGroupId | undefined =
         bestForAgeGroup || selectedSubcategory.defaultAgeGroup;
 
+      // multi-subcategory support: primary + extras
+      const allSubcategoryIdsRaw = [
+        selectedSubcategory.id,
+        ...extraSubcategoryIds,
+      ];
+      const allSubcategoryIds = Array.from(
+        new Set(allSubcategoryIdsRaw.filter(Boolean)),
+      ) as string[];
+
+      const allSubcategoryLabels = allSubcategoryIds.map((id) => {
+        const sub = subcategories.find((s) => s.id === id);
+        return sub?.label || id;
+      });
+
       const docRef = await addDoc(collection(db, 'videos'), {
         userId: user.uid,
         title: title.trim(),
@@ -339,8 +373,15 @@ export function UploadModal({ onClose }: Props) {
         // new discovery metadata
         categoryId,
         categoryLabel: selectedCategory.label,
+
+        // single primary subcategory (backwards compatibility)
         subcategoryId: selectedSubcategory.id,
         subcategoryLabel: selectedSubcategory.label,
+
+        // NEW: multi-subcategory fields
+        subcategoryIds: allSubcategoryIds,
+        subcategoryLabels: allSubcategoryLabels,
+
         targetGender: resolvedGender || null,
         targetAgeGroup: resolvedAgeGroup || null,
         hairColors: activeFacets.hairColors ? hairColorIds : [],
@@ -545,6 +586,35 @@ export function UploadModal({ onClose }: Props) {
                   </option>
                 ))}
               </select>
+
+              {/* NEW: multiple subcategories as chips */}
+              {subcategories.length > 1 && (
+                <div className="mt-2">
+                  <p className="text-xs font-medium mb-1">
+                    Also fits under (optional)
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {subcategories.map((sub) => {
+                      if (sub.id === subcategoryId) return null; // skip primary
+                      const checked = extraSubcategoryIds.includes(sub.id);
+                      return (
+                        <button
+                          key={sub.id}
+                          type="button"
+                          onClick={() => toggleExtraSubcategory(sub.id)}
+                          className={`px-3 py-1 rounded-full text-xs border ${
+                            checked
+                              ? 'bg-gray-900 text-white border-gray-900'
+                              : 'bg-white text-gray-800 border-gray-300'
+                          }`}
+                        >
+                          {sub.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </>
           )}
         </div>

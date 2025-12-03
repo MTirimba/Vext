@@ -1,6 +1,6 @@
-'use client';
+"use client";
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from "react";
 import {
   collection,
   query,
@@ -9,15 +9,13 @@ import {
   updateDoc,
   doc,
   getDoc,
-  addDoc,
-  serverTimestamp,
-} from 'firebase/firestore';
-import { db, auth } from '@/lib/firebase';
-import { useAuthState } from 'react-firebase-hooks/auth';
-import { FaWhatsapp, FaPhoneAlt } from 'react-icons/fa';
-import Calendar from 'react-calendar';
-import 'react-calendar/dist/Calendar.css';
-import MessageButton from '@/components/MessageButton';
+} from "firebase/firestore";
+import { db, auth } from "@/lib/firebase";
+import { useAuthState } from "react-firebase-hooks/auth";
+import { FaWhatsapp, FaPhoneAlt } from "react-icons/fa";
+import Calendar from "react-calendar";
+import "react-calendar/dist/Calendar.css";
+import MessageButton from "@/components/MessageButton";
 
 interface Booking {
   id: string;
@@ -26,21 +24,25 @@ interface Booking {
   videoId?: string;
   date: string;
   time: string;
-  total: number;             // client-charged total (includes markup)
+  total: number; // client-charged total (includes markup)
   status: string;
   addons?: Record<string, number>;
   clientPhone?: string;
   providerPhone?: string;
   clientName?: string;
   shortId?: string;
-  completionPin?: string;    // optional, not usually visible to provider
+  completionPin?: string; // optional, not usually visible to provider
   releaseVerified?: boolean; // true when PIN was successfully verified
 
   // optional pricing fields that may exist on the booking doc
-  subtotal?: number;         // provider base (service + addons, before markup)
-  providerAmount?: number;   // if confirm-booking stored it
-  markupRate?: number;
-  markupAmount?: number;
+  subtotal?: number; // provider base (service + addons, before markup)
+  providerAmount?: number; // if confirm-booking stored it
+  markupRate?: number; // fraction like 0.1 for 10%
+  markupAmount?: number; // absolute fee amount
+  // in future we may also use platformFee
+
+  // ⭐ client note
+  clientInstructions?: string;
 }
 
 interface Video {
@@ -66,32 +68,60 @@ interface UserProfile {
 // Helper to normalize date strings into YYYY-MM-DD keys
 function dateKey(raw: string | Date): string {
   const d = raw instanceof Date ? raw : new Date(raw);
-  if (isNaN(d.getTime())) return '';
-  return d.toISOString().split('T')[0];
+  if (isNaN(d.getTime())) return "";
+  return d.toISOString().split("T")[0];
 }
 
 // Helper to compute provider-facing amount (without markup)
+// ✅ Tier-aware / markup-aware:
+// 1) Prefer explicit providerAmount / base/subtotal fields.
+// 2) If platformFee / markupAmount is present, use total - fee.
+// 3) If markupRate is present as a fraction (e.g. 0.1), reverse it.
+// 4) Fallback: treat total as provider share (for display only).
 function providerDisplayAmount(b: Booking): number {
-  // Prefer explicit base/subtotal fields if present
-  const explicit =
-    Number(b.subtotal) ||
-    Number(b.providerAmount) ||
-    Number((b as any).baseTotal) ||
-    Number((b as any).subtotalBeforeMarkup) ||
-    Number((b as any).basePrice);
-
+  // 1) Explicit base/provider fields first
+  const explicit = Number(
+    b.providerAmount ??
+      b.subtotal ??
+      (b as any).baseTotal ??
+      (b as any).subtotalBeforeMarkup ??
+      (b as any).basePrice,
+  );
   if (!isNaN(explicit) && explicit > 0) {
     return Math.round(explicit * 100) / 100;
   }
 
-  // Fallback: reverse a 10% markup from total
-  const t = Number(b.total) || 0;
-  if (!t) return 0;
-  const reversed = t / 1.1;
-  return Math.round(reversed * 100) / 100;
+  const total = Number(b.total) || 0;
+  if (total <= 0) return 0;
+
+  // 2) If we know an explicit fee amount, infer provider share from difference
+  const feeLikeKeys = ["platformFee", "markupAmount"] as const;
+  for (const key of feeLikeKeys) {
+    const fee = Number((b as any)[key]);
+    if (!isNaN(fee) && fee > 0 && fee < total) {
+      const implied = total - fee;
+      if (implied > 0) {
+        return Math.round(implied * 100) / 100;
+      }
+    }
+  }
+
+  // 3) If we know the markupRate as a fraction, reverse it
+  if (!isNaN(Number(b.markupRate))) {
+    const rate = Number(b.markupRate);
+    if (rate > 0 && rate < 1) {
+      const implied = total / (1 + rate);
+      if (implied > 0) {
+        return Math.round(implied * 100) / 100;
+      }
+    }
+  }
+
+  // 4) Last resort: assume provider gets the full total (display-only approximation)
+  return Math.round(total * 100) / 100;
 }
 
-type ViewMode = 'calendar' | 'today' | 'all' | 'delivered';
+type ViewMode = "calendar" | "today" | "all" | "delivered";
 
 export default function CreatorBookings() {
   const [user] = useAuthState(auth);
@@ -99,8 +129,8 @@ export default function CreatorBookings() {
     (Booking & { video?: Video; client?: UserProfile; provider?: UserProfile })[]
   >([]);
 
-  const [searchTerm, setSearchTerm] = useState('');
-  const [view, setView] = useState<ViewMode>('calendar');
+  const [searchTerm, setSearchTerm] = useState("");
+  const [view, setView] = useState<ViewMode>("calendar");
 
   // 🔐 PIN entry + verification state (per booking)
   const [pinInputs, setPinInputs] = useState<Record<string, string>>({});
@@ -116,8 +146,8 @@ export default function CreatorBookings() {
 
     (async () => {
       const qy = query(
-        collection(db, 'bookings'),
-        where('providerId', '==', user.uid),
+        collection(db, "bookings"),
+        where("providerId", "==", user.uid),
       );
       const snap = await getDocs(qy);
 
@@ -129,7 +159,7 @@ export default function CreatorBookings() {
           let provider: UserProfile | undefined;
 
           if (booking.videoId) {
-            const videoSnap = await getDoc(doc(db, 'videos', booking.videoId));
+            const videoSnap = await getDoc(doc(db, "videos", booking.videoId));
             if (videoSnap.exists()) {
               const vd = videoSnap.data() as Video & {
                 url?: string;
@@ -146,13 +176,13 @@ export default function CreatorBookings() {
           }
 
           if (booking.clientId) {
-            const clientSnap = await getDoc(doc(db, 'users', booking.clientId));
+            const clientSnap = await getDoc(doc(db, "users", booking.clientId));
             if (clientSnap.exists()) client = clientSnap.data() as UserProfile;
           }
 
           if (booking.providerId) {
             const providerSnap = await getDoc(
-              doc(db, 'users', booking.providerId),
+              doc(db, "users", booking.providerId),
             );
             if (providerSnap.exists())
               provider = providerSnap.data() as UserProfile;
@@ -178,18 +208,18 @@ export default function CreatorBookings() {
     const providerName =
       booking.provider?.name ||
       booking.provider?.fullName ||
-      'Service Provider';
-    const locationDetails = `${booking.provider?.location || ''} ${
-      booking.provider?.building || ''
-    } ${booking.provider?.room || ''}`.trim();
+      "Service Provider";
+    const locationDetails = `${booking.provider?.location || ""} ${
+      booking.provider?.building || ""
+    } ${booking.provider?.room || ""}`.trim();
     const mapsLink = booking.provider?.location
       ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
           booking.provider.location,
         )}`
-      : '';
+      : "";
 
     const message =
-      booking.status === 'accepted'
+      booking.status === "accepted"
         ? `Hi ${clientDisplayName}, your booking #${
             booking.shortId || booking.id
           } has been ACCEPTED by ${providerName} for ${dateStr} at ${timeStr}. Location: ${locationDetails}. Map: ${mapsLink}`
@@ -197,26 +227,26 @@ export default function CreatorBookings() {
             booking.shortId || booking.id
           } has been REJECTED by ${providerName}.`;
 
-    await fetch('/api/send-sms', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+    await fetch("/api/send-sms", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ to: booking.clientPhone, message }),
     });
   };
 
   const updateStatus = async (
     id: string,
-    status: 'accepted' | 'rejected' | 'completed',
+    status: "accepted" | "rejected" | "completed",
   ) => {
     const booking = bookings.find((b) => b.id === id);
     if (!booking) return;
 
     // ❌ Rejection → handled centrally via /api/reject-booking
-    if (status === 'rejected') {
+    if (status === "rejected") {
       try {
-        const res = await fetch('/api/reject-booking', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+        const res = await fetch("/api/reject-booking", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             bookingId: id,
             providerId: booking.providerId,
@@ -225,33 +255,33 @@ export default function CreatorBookings() {
 
         const data = await res.json();
         if (!res.ok) {
-          throw new Error(data.error || 'Failed to reject booking');
+          throw new Error(data.error || "Failed to reject booking");
         }
 
         // Update local state
         setBookings((prev) =>
           prev.map((b) =>
-            b.id === id ? { ...b, status: 'rejected' } : b,
+            b.id === id ? { ...b, status: "rejected" } : b,
           ),
         );
 
         // SMS to client (same as before)
-        await sendClientSMS({ ...booking, status: 'rejected' });
+        await sendClientSMS({ ...booking, status: "rejected" });
       } catch (err: any) {
-        console.error('reject booking error:', err);
-        alert(err.message || 'Could not reject booking. Try again.');
+        console.error("reject booking error:", err);
+        alert(err.message || "Could not reject booking. Try again.");
       }
       return;
     }
 
     // ✅ accepted / completed still updated client-side
-    await updateDoc(doc(db, 'bookings', id), { status });
+    await updateDoc(doc(db, "bookings", id), { status });
     setBookings((prev) =>
       prev.map((b) => (b.id === id ? { ...b, status } : b)),
     );
 
-    if (status === 'accepted') {
-      await sendClientSMS({ ...booking, status: 'accepted' });
+    if (status === "accepted") {
+      await sendClientSMS({ ...booking, status: "accepted" });
     }
   };
 
@@ -260,11 +290,11 @@ export default function CreatorBookings() {
   const handleVerifyPin = async (
     booking: Booking & { client?: UserProfile; provider?: UserProfile },
   ) => {
-    const pin = (pinInputs[booking.id] || '').trim();
+    const pin = (pinInputs[booking.id] || "").trim();
     if (!pin) {
       setVerifyMessages((prev) => ({
         ...prev,
-        [booking.id]: 'Please enter the PIN provided by the client.',
+        [booking.id]: "Please enter the PIN provided by the client.",
       }));
       return;
     }
@@ -273,9 +303,9 @@ export default function CreatorBookings() {
       setVerifyingId(booking.id);
       setVerifyMessages((prev) => ({ ...prev, [booking.id]: null }));
 
-      const res = await fetch('/api/verify-completion', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const res = await fetch("/api/verify-completion", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           bookingId: booking.id,
           pin,
@@ -285,28 +315,28 @@ export default function CreatorBookings() {
 
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.error || 'Failed to verify PIN');
+        throw new Error(data.error || "Failed to verify PIN");
       }
 
       // ✅ PIN = service delivered. Mark as completed and releaseVerified locally.
       setBookings((prev) =>
         prev.map((b) =>
           b.id === booking.id
-            ? { ...b, status: 'completed', releaseVerified: true }
+            ? { ...b, status: "completed", releaseVerified: true }
             : b,
         ),
       );
       setVerifyMessages((prev) => ({
         ...prev,
         [booking.id]:
-          'PIN verified. Service marked as delivered and funds for this booking will reflect in your available balance.',
+          "PIN verified. Service marked as delivered and funds for this booking will reflect in your available balance.",
       }));
-      setPinInputs((prev) => ({ ...prev, [booking.id]: '' }));
+      setPinInputs((prev) => ({ ...prev, [booking.id]: "" }));
     } catch (err: any) {
       setVerifyMessages((prev) => ({
         ...prev,
         [booking.id]:
-          err.message || 'Could not verify PIN. Check and try again.',
+          err.message || "Could not verify PIN. Check and try again.",
       }));
     } finally {
       setVerifyingId(null);
@@ -314,7 +344,7 @@ export default function CreatorBookings() {
   };
 
   // ---------- Search + filtering helpers ----------
-  const norm = (s?: string) => (s || '').toLowerCase().trim();
+  const norm = (s?: string) => (s || "").toLowerCase().trim();
   const needle = norm(searchTerm);
 
   const allFiltered = useMemo(() => {
@@ -341,7 +371,7 @@ export default function CreatorBookings() {
   const selectedDateKey =
     selectedDate && !isNaN(selectedDate.getTime())
       ? dateKey(selectedDate)
-      : '';
+      : "";
 
   // All bookings for selected date (for main calendar view)
   const selectedDayFiltered = useMemo(
@@ -354,7 +384,7 @@ export default function CreatorBookings() {
 
   // Completed-only set (for delivered calendar)
   const completedFiltered = useMemo(
-    () => allFiltered.filter((b) => b.status === 'completed'),
+    () => allFiltered.filter((b) => b.status === "completed"),
     [allFiltered],
   );
 
@@ -389,11 +419,11 @@ export default function CreatorBookings() {
   }, [completedFiltered]);
 
   // tel & WhatsApp helpers
-  const telHref = (n?: string) => (n ? `tel:${n.replace(/\s+/g, '')}` : '');
+  const telHref = (n?: string) => (n ? `tel:${n.replace(/\s+/g, "")}` : "");
   const waHref = (n?: string) => {
-    if (!n) return '';
-    const digits = n.replace(/[^\d]/g, '');
-    return digits ? `https://wa.me/${digits}` : '';
+    if (!n) return "";
+    const digits = n.replace(/[^\d]/g, "");
+    return digits ? `https://wa.me/${digits}` : "";
   };
 
   const renderBookingCard = (
@@ -404,7 +434,7 @@ export default function CreatorBookings() {
     const providerAmount = providerDisplayAmount(b);
 
     // Show PIN section for accepted bookings (this is now the only way to complete)
-    const showPinSection = b.status === 'accepted';
+    const showPinSection = b.status === "accepted";
 
     return (
       <div key={b.id} className="border p-4 mb-4 rounded shadow">
@@ -423,7 +453,7 @@ export default function CreatorBookings() {
               <strong>Booking ID:</strong> {b.shortId || b.id}
             </p>
             <p>
-              <strong>Client:</strong>{' '}
+              <strong>Client:</strong>{" "}
               {b.client?.fullName || b.client?.name || b.clientId}
             </p>
 
@@ -468,8 +498,8 @@ export default function CreatorBookings() {
             </div>
 
             <p className="mt-2">
-              <strong>Date:</strong>{' '}
-              {b.date ? new Date(b.date).toLocaleDateString() : '-'}
+              <strong>Date:</strong>{" "}
+              {b.date ? new Date(b.date).toLocaleDateString() : "-"}
             </p>
             <p>
               <strong>Time:</strong> {b.time}
@@ -477,9 +507,17 @@ export default function CreatorBookings() {
 
             {/* ✅ Provider-facing amount (no markup) */}
             <p className="mt-1">
-              <strong>Your amount for this booking:</strong> KSHS{' '}
+              <strong>Your amount for this booking:</strong> KSHS{" "}
               {providerAmount}
             </p>
+
+            {/* ⭐ Client's special instructions */}
+            {b.clientInstructions && (
+              <div className="mt-2 p-2 rounded bg-amber-50 border border-amber-100 text-xs text-gray-800 whitespace-pre-wrap">
+                <span className="font-semibold">Client instructions:</span>{" "}
+                {b.clientInstructions}
+              </div>
+            )}
 
             {b.addons && Object.keys(b.addons).length > 0 && (
               <div className="mt-2">
@@ -498,16 +536,16 @@ export default function CreatorBookings() {
               <strong>Status:</strong> {b.status}
             </p>
 
-            {b.status === 'pending' && (
+            {b.status === "pending" && (
               <div className="flex space-x-2 mt-3">
                 <button
-                  onClick={() => updateStatus(b.id, 'accepted')}
+                  onClick={() => updateStatus(b.id, "accepted")}
                   className="bg-green-500 text-white px-3 py-1 rounded"
                 >
                   Accept
                 </button>
                 <button
-                  onClick={() => updateStatus(b.id, 'rejected')}
+                  onClick={() => updateStatus(b.id, "rejected")}
                   className="bg-red-500 text-white px-3 py-1 rounded"
                 >
                   Reject
@@ -524,7 +562,7 @@ export default function CreatorBookings() {
                 <input
                   type="text"
                   maxLength={4}
-                  value={pinInputs[b.id] || ''}
+                  value={pinInputs[b.id] || ""}
                   onChange={(e) =>
                     setPinInputs((prev) => ({
                       ...prev,
@@ -537,13 +575,13 @@ export default function CreatorBookings() {
                 <button
                   onClick={() => handleVerifyPin(b)}
                   disabled={
-                    verifyingId === b.id || !(pinInputs[b.id] || '').trim()
+                    verifyingId === b.id || !(pinInputs[b.id] || "").trim()
                   }
                   className="ml-2 px-3 py-1 rounded bg-green-600 text-white text-sm disabled:bg-gray-400"
                 >
                   {verifyingId === b.id
-                    ? 'Verifying…'
-                    : 'Verify PIN & Mark Delivered'}
+                    ? "Verifying…"
+                    : "Verify PIN & Mark Delivered"}
                 </button>
                 <p className="text-xs text-gray-600 mt-1">
                   After you have delivered the service, ask the client for
@@ -578,7 +616,7 @@ export default function CreatorBookings() {
             ) : b.video?.thumbnailUrl || b.video?.imageUrl ? (
               <img
                 src={b.video.thumbnailUrl || b.video.imageUrl}
-                alt={b.video.title || 'Booking Media'}
+                alt={b.video.title || "Booking Media"}
                 className="w-full max-w-md h-64 md:h-80 lg:h-96 object-contain rounded bg-gray-100"
               />
             ) : (
@@ -600,11 +638,11 @@ export default function CreatorBookings() {
   const selectedCompletedList = selectedCompletedFiltered;
 
   const currentList =
-    view === 'today'
+    view === "today"
       ? todayList
-      : view === 'calendar'
+      : view === "calendar"
       ? selectedDayList
-      : view === 'delivered'
+      : view === "delivered"
       ? selectedCompletedList
       : allFilteredList;
 
@@ -619,10 +657,10 @@ export default function CreatorBookings() {
           <div className="inline-flex rounded-full bg-gray-100 p-1 w-full md:w-auto">
             {(
               [
-                { id: 'calendar', label: 'Calendar (All)' },
-                { id: 'delivered', label: 'Calendar (Delivered)' },
-                { id: 'today', label: "Today's Bookings" },
-                { id: 'all', label: 'All Bookings' },
+                { id: "calendar", label: "Calendar (All)" },
+                { id: "delivered", label: "Calendar (Delivered)" },
+                { id: "today", label: "Today's Bookings" },
+                { id: "all", label: "All Bookings" },
               ] as { id: ViewMode; label: string }[]
             ).map((tab) => (
               <button
@@ -631,8 +669,8 @@ export default function CreatorBookings() {
                 onClick={() => setView(tab.id)}
                 className={`flex-1 md:flex-none px-3 py-1.5 text-xs sm:text-sm rounded-full transition ${
                   view === tab.id
-                    ? 'bg-white shadow text-gray-900'
-                    : 'text-gray-600'
+                    ? "bg-white shadow text-gray-900"
+                    : "text-gray-600"
                 }`}
               >
                 {tab.label}
@@ -652,18 +690,18 @@ export default function CreatorBookings() {
       </div>
 
       {/* Calendar views (all vs delivered) */}
-      {(view === 'calendar' || view === 'delivered') && (
+      {(view === "calendar" || view === "delivered") && (
         <div className="mb-6 grid gap-4 lg:grid-cols-[minmax(260px,320px),1fr]">
           <div className="bg-white rounded-lg shadow p-3 flex justify-center">
             <Calendar
               value={selectedDate}
               onChange={(d) => setSelectedDate(d as Date)}
               tileContent={({ date, view: calView }) => {
-                if (calView !== 'month') return null;
+                if (calView !== "month") return null;
 
                 const key = dateKey(date);
                 const countsMap =
-                  view === 'calendar' ? bookingsByDate : completedByDate;
+                  view === "calendar" ? bookingsByDate : completedByDate;
                 const count = countsMap[key] || 0;
 
                 if (!count) return null;
@@ -680,18 +718,16 @@ export default function CreatorBookings() {
 
           <div>
             <h2 className="text-lg font-semibold mb-2">
-              {view === 'calendar'
-                ? 'Bookings on '
-                : 'Delivered bookings on '}
+              {view === "calendar" ? "Bookings on " : "Delivered bookings on "}
               {selectedDateKey
                 ? new Date(selectedDateKey).toLocaleDateString()
-                : 'selected day'}
+                : "selected day"}
             </h2>
             {currentList.length === 0 ? (
               <p className="text-sm text-gray-600">
-                {view === 'calendar'
-                  ? 'No bookings for this day (matching current search).'
-                  : 'No delivered bookings for this day (matching current search).'}
+                {view === "calendar"
+                  ? "No bookings for this day (matching current search)."
+                  : "No delivered bookings for this day (matching current search)."}
               </p>
             ) : (
               currentList.map(renderBookingCard)
@@ -701,13 +737,13 @@ export default function CreatorBookings() {
       )}
 
       {/* Today / All views */}
-      {view !== 'calendar' && view !== 'delivered' && (
+      {view !== "calendar" && view !== "delivered" && (
         <>
           {currentList.length === 0 && (
             <p className="text-sm text-gray-600 mb-2">
-              {view === 'today'
+              {view === "today"
                 ? "No bookings for today (matching current search)."
-                : 'No bookings found.'}
+                : "No bookings found."}
             </p>
           )}
           {currentList.map(renderBookingCard)}

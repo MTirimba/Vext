@@ -14,6 +14,7 @@ import {
   onSnapshot,
   limit,
   updateDoc,
+  where,
 } from 'firebase/firestore';
 import { db, auth } from '../lib/firebase';
 import { useAuthState } from 'react-firebase-hooks/auth';
@@ -33,7 +34,13 @@ import {
   FaImages,
   FaSlidersH,
   FaBell,
+  FaWhatsapp,
+  FaFacebook,
+  FaTwitter,
+  FaEnvelope,
+  FaInstagram,
 } from 'react-icons/fa';
+import { SiTiktok } from 'react-icons/si';
 import { useRouter } from 'next/navigation';
 import { CommentModal } from './CommentModal';
 import BookingModal from './BookingModal';
@@ -58,6 +65,45 @@ import {
 import ServiceFiltersDropdown, {
   type FeedFilters,
 } from './ServiceFiltersDropdown';
+
+// ---------- markup config (tiered) ----------
+
+interface MarkupTier {
+  min: number;
+  max: number | null; // null = open-ended
+  percent: number; // e.g. 10 = 10%
+}
+
+interface MarkupConfig {
+  tiers: MarkupTier[];
+}
+
+// Default tiers (used if config/pricing missing or invalid)
+// 1–1500  → 10%
+// 1500–5000 → 5%
+// 5000–10000 → 2.5%
+// 10000+ → 2%
+const DEFAULT_MARKUP_CONFIG: MarkupConfig = {
+  tiers: [
+    { min: 0, max: 1500, percent: 10 },
+    { min: 1500, max: 5000, percent: 5 },
+    { min: 5000, max: 10000, percent: 2.5 },
+    { min: 10000, max: null, percent: 2 },
+  ],
+};
+
+function getMarkupPercent(basePrice: number, config?: MarkupConfig | null) {
+  const cfg = config && config.tiers?.length ? config : DEFAULT_MARKUP_CONFIG;
+  const tier = cfg.tiers.find(
+    (t) => basePrice >= t.min && (t.max == null || basePrice <= t.max),
+  );
+  return tier ? tier.percent : 0;
+}
+
+function applyMarkup(basePrice: number, config?: MarkupConfig | null) {
+  const pct = getMarkupPercent(basePrice, config);
+  return Math.round(basePrice * (1 + pct / 100));
+}
 
 // --- types
 interface MediaItem {
@@ -201,6 +247,12 @@ export default function VideoFeed() {
   const [bookingVideo, setBookingVideo] = useState<VideoDoc | null>(null);
   const [editingVideo, setEditingVideo] = useState<VideoDoc | null>(null);
 
+  // NEW: share modal state
+  const [shareVideo, setShareVideo] = useState<VideoDoc | null>(null);
+
+  // NEW: markup config state
+  const [markupConfig, setMarkupConfig] = useState<MarkupConfig | null>(null);
+
   const sliderRef = useRef<HTMLDivElement | null>(null);
   const sliderInstanceRef = useRef<any>(null);
   const [isSliderReady, setIsSliderReady] = useState(false);
@@ -215,6 +267,9 @@ export default function VideoFeed() {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notifications, setNotifications] = useState<UserNotification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
+
+  // 💬 messages (unread conversations count)
+  const [unreadMessagesCount, setUnreadMessagesCount] = useState(0);
 
   // 🔎 slide-out search UI state
   const [searchOpen, setSearchOpen] = useState(false);
@@ -244,6 +299,11 @@ export default function VideoFeed() {
   });
   const [filtersOpen, setFiltersOpen] = useState(false);
 
+  // aggregated attention flags
+  const hasUnreadNotifications = unreadCount > 0;
+  const hasUnreadMessages = unreadMessagesCount > 0;
+  const hasAnyAttentionDot = hasUnreadNotifications || hasUnreadMessages;
+
   // Helpers
   const isImageUrl = (url: string) => {
     if (!url) return false;
@@ -266,6 +326,33 @@ export default function VideoFeed() {
       sliderInstanceRef.current = sliderRef.current;
       setIsSliderReady(true);
     }
+  }, []);
+
+  // 🔁 load markup config from Firestore (shared with admin)
+  useEffect(() => {
+    (async () => {
+      try {
+        const snap = await getDoc(doc(db, 'config', 'pricing'));
+        if (snap.exists()) {
+          const data = snap.data() as any;
+          if (Array.isArray(data.tiers)) {
+            const tiers: MarkupTier[] = data.tiers.map((t: any) => ({
+              min: Number(t.min) || 0,
+              max:
+                typeof t.max === 'number'
+                  ? t.max
+                  : t.max == null
+                  ? null
+                  : Number(t.max),
+              percent: Number(t.percent) || 0,
+            }));
+            setMarkupConfig({ tiers });
+          }
+        }
+      } catch (err) {
+        console.error('load markup config error', err);
+      }
+    })();
   }, []);
 
   // intersection observer for auto-play
@@ -527,6 +614,107 @@ export default function VideoFeed() {
     return () => unsub();
   }, [user]);
 
+  // 💬 live unread messages subscription based on conversations/messages
+  useEffect(() => {
+    if (!user) {
+      setUnreadMessagesCount(0);
+      return;
+    }
+
+    // we track last message per conversation
+    const lastMessageByConversation: Record<
+      string,
+      { sender?: string; read?: boolean }
+    > = {};
+    const messageUnsubs = new Map<string, () => void>();
+
+    const convQ = query(
+      collection(db, 'conversations'),
+      where('participants', 'array-contains', user.uid),
+      orderBy('createdAt', 'desc'),
+    );
+
+    const convUnsub = onSnapshot(
+      convQ,
+      (snap) => {
+        const currentConvIds = new Set<string>();
+
+        snap.docs.forEach((convDoc) => {
+          const convId = convDoc.id;
+          currentConvIds.add(convId);
+
+          // set up last-message listener only once per conversation
+          if (!messageUnsubs.has(convId)) {
+            const messagesRef = collection(
+              db,
+              'conversations',
+              convId,
+              'messages',
+            );
+            const lastMsgQ = query(
+              messagesRef,
+              orderBy('createdAt', 'desc'),
+              limit(1),
+            );
+
+            const msgUnsub = onSnapshot(
+              lastMsgQ,
+              (msgSnap) => {
+                if (!msgSnap.empty) {
+                  const lastMsg = msgSnap.docs[0].data() as {
+                    sender?: string;
+                    read?: boolean;
+                  };
+                  lastMessageByConversation[convId] = lastMsg;
+                } else {
+                  delete lastMessageByConversation[convId];
+                }
+
+                // recompute unread conversations:
+                // last message exists, not sent by me, and read !== true
+                let unreadConversations = 0;
+                Object.entries(lastMessageByConversation).forEach(
+                  ([, msg]) => {
+                    if (
+                      msg.sender &&
+                      msg.sender !== user.uid &&
+                      msg.read !== true
+                    ) {
+                      unreadConversations += 1;
+                    }
+                  },
+                );
+                setUnreadMessagesCount(unreadConversations);
+              },
+              (err) => {
+                console.error('last message snapshot error', err);
+              },
+            );
+
+            messageUnsubs.set(convId, msgUnsub);
+          }
+        });
+
+        // clean up listeners for conversations that no longer exist
+        for (const [convId, unsub] of messageUnsubs.entries()) {
+          if (!currentConvIds.has(convId)) {
+            unsub();
+            messageUnsubs.delete(convId);
+            delete lastMessageByConversation[convId];
+          }
+        }
+      },
+      (err) => {
+        console.error('conversations snapshot error (messages)', err);
+      },
+    );
+
+    return () => {
+      convUnsub();
+      messageUnsubs.forEach((u) => u());
+    };
+  }, [user]);
+
   // 🔔 when notifications modal opens, mark unread as read
   useEffect(() => {
     if (!notificationsOpen || !user) return;
@@ -584,7 +772,8 @@ export default function VideoFeed() {
       }
     };
     el.addEventListener('scroll', handleScrollDown);
-    return () => el.removeEventListener('scroll', handleScrollDown);
+    return () =>
+      el.removeEventListener('scroll', handleScrollDown);
   }, [allVideos]);
 
   // infinite scroll – prepend
@@ -602,7 +791,8 @@ export default function VideoFeed() {
       }
     };
     el.addEventListener('scroll', handleScrollUp);
-    return () => el.removeEventListener('scroll', handleScrollUp);
+    return () =>
+      el.removeEventListener('scroll', handleScrollUp);
   }, [allVideos]);
 
   const handleSignOut = async () => {
@@ -624,8 +814,14 @@ export default function VideoFeed() {
     const refDoc = doc(db, 'users', creatorId, 'followers', user.uid!);
     if (followMap[creatorId]) await deleteDoc(refDoc);
     else
-      await setDoc(refDoc, { followedAt: Date.now(), userId: user.uid } as any);
-    setFollowMap((prev) => ({ ...prev, [creatorId]: !prev[creatorId] }));
+      await setDoc(refDoc, {
+        followedAt: Date.now(),
+        userId: user.uid,
+      } as any);
+    setFollowMap((prev) => ({
+      ...prev,
+      [creatorId]: !prev[creatorId],
+    }));
   };
 
   const handleDelete = async (videoId: string) => {
@@ -685,7 +881,9 @@ export default function VideoFeed() {
 
       // 2) CATEGORY filter (multi-select)
       if (filters.categories.length) {
-        const catId = (v.categoryId || '').toString() as CategoryId | '';
+        const catId = (v.categoryId || '').toString() as
+          | CategoryId
+          | '';
         if (!catId || !filters.categories.includes(catId as CategoryId)) {
           return false;
         }
@@ -811,17 +1009,9 @@ export default function VideoFeed() {
     v.paused ? v.play().catch(() => {}) : v.pause();
   };
 
+  // NEW: open share modal for this post
   const handleShare = (video: VideoDoc) => {
-    const link = `${window.location.origin}/video/${video.id}`;
-    navigator.clipboard
-      .writeText(link)
-      .then(() => {
-        alert('Link copied to clipboard!');
-      })
-      .catch((err) => {
-        console.error('Failed to copy link: ', err);
-        alert('❌ Could not copy link');
-      });
+    setShareVideo(video);
   };
 
   const openAuthModal = () => {
@@ -939,11 +1129,11 @@ export default function VideoFeed() {
           <FaSlidersH />
         </button>
 
-        {/* Avatar / menu */}
+        {/* Avatar / menu with attention dot */}
         <div className="relative">
           <button
             onClick={() => setDropdownOpen(!dropdownOpen)}
-            className="focus:outline-none"
+            className="focus:outline-none relative"
           >
             {user?.photoURL ? (
               <img
@@ -955,6 +1145,10 @@ export default function VideoFeed() {
               <div className="w-9 h-9 bg-gray-400 rounded-full flex items-center justify-center">
                 <span className="text-white font-medium">U</span>
               </div>
+            )}
+
+            {hasAnyAttentionDot && (
+              <span className="absolute -top-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-400 border border-black" />
             )}
           </button>
 
@@ -983,15 +1177,38 @@ export default function VideoFeed() {
                       setNotificationsOpen(true);
                       setDropdownOpen(false);
                     }}
-                    className="block w-full px-2 py-1 hover:bg-gray-700 rounded mb-1 flex items-center justify-between"
+                    className="block w-full px-2 py-1 hover:bg-gray-700 rounded mb-1 flex items-center"
                   >
-                    <span className="flex items-center gap-2">
+                    <span className="relative inline-flex items-center gap-2 text-sm">
                       <FaBell className="text-xs" />
                       <span>Notifications</span>
                     </span>
                     {unreadCount > 0 && (
-                      <span className="ml-2 inline-flex items-center justify-center min-w-[18px] h-4 px-1 rounded-full bg-green-500 text-[10px] font-semibold">
+                      <span className="absolute -top-1 -right-1 flex h-3 w-3 items-center justify-center rounded-full bg-green-500 text-[8px] font-semibold">
                         {unreadCount > 9 ? '9+' : unreadCount}
+                      </span>
+                    )}
+                  </button>
+
+                  {/* Messages entry (below notifications) */}
+                  <button
+                    onClick={() => {
+                      router.push('/messages');
+                      setDropdownOpen(false);
+                    }}
+                    className="block w-full px-2 py-1 hover:bg-gray-700 rounded mb-1 flex items-center"
+                  >
+                    <span className="relative inline-flex items-center gap-2 text-sm">
+                      <FaCommentDots className="text-xs" />
+                      <span>Messages</span>
+                    </span>
+                    {unreadMessagesCount > 0 && (
+                      <span className="absolute -top-1 -right-1 flex h-3 w-3 items-center justify-center rounded-full bg-green-400 text-[8px] font-semibold">
+                        {unreadMessagesCount > 1
+                          ? unreadMessagesCount > 9
+                            ? '9+'
+                            : unreadMessagesCount
+                          : ''}
                       </span>
                     )}
                   </button>
@@ -1078,16 +1295,6 @@ export default function VideoFeed() {
                     className="block w-full px-2 py-1 hover:bg-gray-700 rounded mb-1"
                   >
                     Edit Profile
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      router.push('/messages');
-                      setDropdownOpen(false);
-                    }}
-                    className="block w-full px-2 py-1 hover:bg-gray-700 rounded mb-1"
-                  >
-                    Messages
                   </button>
 
                   <button
@@ -1258,7 +1465,7 @@ export default function VideoFeed() {
 
           const displayedPrice =
             typeof v.serviceCost === 'number'
-              ? Math.round(v.serviceCost * 1.1)
+              ? applyMarkup(v.serviceCost, markupConfig)
               : null;
 
           const media = getMediaList(v);
@@ -1464,7 +1671,7 @@ export default function VideoFeed() {
 
               {/* Text + Price */}
               {(v.title || v.description || displayedPrice !== null) && (
-                <div className="absolute bottom-3 left-3 max-w-[60%] text-shadow overflow-hidden text-ellipsis z-50">
+                <div className="absolute bottom-3 left-3 max-w-[60%] overflow-hidden text-ellipsis z-50">
                   {v.title && (
                     <h3 className="text-sm font-bold text-white">{v.title}</h3>
                   )}
@@ -1527,6 +1734,286 @@ export default function VideoFeed() {
           onClose={() => setEditingVideo(null)}
         />
       )}
+
+      {/* NEW: Post share modal */}
+      {shareVideo && (
+        <PostShareModal
+          video={shareVideo}
+          creatorProfile={userProfiles[shareVideo.userId!] ?? null}
+          onClose={() => setShareVideo(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/* -------------------------------------------------------
+ * Post Share Modal – YouTube-style with more networks
+ * Shares a specific video/image + link + curated message
+ * ----------------------------------------------------- */
+
+function PostShareModal({
+  video,
+  creatorProfile,
+  onClose,
+}: {
+  video: VideoDoc;
+  creatorProfile: UserProfile | null;
+  onClose: () => void;
+}) {
+  const url =
+    typeof window !== 'undefined'
+      ? `${window.location.origin}/video/${video.id}`
+      : '';
+
+  const creatorName =
+    creatorProfile?.businessName ||
+    creatorProfile?.username ||
+    creatorProfile?.personalUsername ||
+    creatorProfile?.businessUsername ||
+    'this provider';
+
+  const shareText = `Book this service on VextUp from ${creatorName} – see details, pricing and reserve a slot instantly here: ${url}`;
+
+  const copyTextAndNotify = async (message?: string) => {
+    try {
+      await navigator.clipboard.writeText(message ?? shareText);
+      alert('Share text copied to clipboard!');
+    } catch (err) {
+      console.error('copy failed', err);
+      alert('Could not copy text.');
+    }
+  };
+
+  const copyLinkOnly = async () => {
+    try {
+      await navigator.clipboard.writeText(url);
+      alert('Post link copied to clipboard!');
+    } catch (err) {
+      console.error('copy failed', err);
+      alert('Could not copy link.');
+    }
+  };
+
+  const openWindow = (shareUrl: string) => {
+    window.open(shareUrl, '_blank', 'noopener,noreferrer');
+  };
+
+  const handleWhatsapp = () => {
+    openWindow(`https://wa.me/?text=${encodeURIComponent(shareText)}`);
+  };
+
+  const handleFacebook = () => {
+    openWindow(
+      `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(
+        url,
+      )}&quote=${encodeURIComponent(shareText)}`,
+    );
+  };
+
+  const handleTwitter = () => {
+    openWindow(
+      `https://twitter.com/intent/tweet?text=${encodeURIComponent(
+        shareText,
+      )}`,
+    );
+  };
+
+  const handleEmail = () => {
+    window.location.href = `mailto:?subject=${encodeURIComponent(
+      'Check out this VextUp service',
+    )}&body=${encodeURIComponent(shareText)}`;
+  };
+
+  // Instagram & TikTok: copy caption + open app/site so user can paste
+  const handleInstagram = async () => {
+    await copyTextAndNotify();
+    openWindow('https://www.instagram.com/');
+  };
+
+  const handleTiktok = async () => {
+    await copyTextAndNotify();
+    openWindow('https://www.tiktok.com/');
+  };
+
+  // Simple preview: first media item
+  const preview: MediaItem | null = (() => {
+    if (video.media && video.media.length > 0) return video.media[0];
+    if (video.url) {
+      const base = video.url.split('?')[0].toLowerCase();
+      const isImg =
+        /\.(png|jpe?g|gif|webp|avif|bmp)$/.test(base) ||
+        base.startsWith('data:image');
+      return { url: video.url, type: isImg ? 'image' : 'video' };
+    }
+    return null;
+  })();
+
+  return (
+    <div className="fixed inset-0 z-[9999] bg-black/70 flex items-center justify-center">
+      <div className="bg-white rounded-lg shadow-xl w-[95vw] max-w-md p-5">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-semibold text-gray-900">
+            Share this service
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-xs text-gray-500 hover:text-gray-800"
+          >
+            <FaTimes />
+          </button>
+        </div>
+
+        {/* Post preview */}
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-16 h-16 rounded-md overflow-hidden bg-gray-100 flex items-center justify-center">
+            {preview ? (
+              preview.type === 'image' ? (
+                <img
+                  src={preview.url}
+                  alt={video.title || 'service preview'}
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <video
+                  src={preview.url}
+                  className="w-full h-full object-cover"
+                  muted
+                  playsInline
+                />
+              )
+            ) : (
+              <span className="text-[10px] text-gray-400 px-2 text-center">
+                Preview unavailable
+              </span>
+            )}
+          </div>
+          <div className="flex-1 min-w-0">
+            {video.title && (
+              <p className="text-xs font-semibold text-gray-900 truncate">
+                {video.title}
+              </p>
+            )}
+            {video.description && (
+              <p className="text-[11px] text-gray-500 line-clamp-2">
+                {video.description}
+              </p>
+            )}
+            <p className="text-[11px] text-gray-600 mt-1">
+              From <span className="font-medium">{creatorName}</span> on
+              VextUp.
+            </p>
+          </div>
+        </div>
+
+        <div className="space-y-4 text-sm text-gray-900">
+          <div>
+            <p className="text-xs text-gray-600 mb-2">Share</p>
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={handleWhatsapp}
+                className="flex flex-col items-center text-xs text-gray-700 hover:text-black"
+              >
+                <div className="w-9 h-9 rounded-full border flex items-center justify-center mb-1">
+                  <FaWhatsapp />
+                </div>
+                WhatsApp
+              </button>
+
+              <button
+                type="button"
+                onClick={handleFacebook}
+                className="flex flex-col items-center text-xs text-gray-700 hover:text-black"
+              >
+                <div className="w-9 h-9 rounded-full border flex items-center justify-center mb-1">
+                  <FaFacebook />
+                </div>
+                Facebook
+              </button>
+
+              <button
+                type="button"
+                onClick={handleTwitter}
+                className="flex flex-col items-center text-xs text-gray-700 hover:text-black"
+              >
+                <div className="w-9 h-9 rounded-full border flex items-center justify-center mb-1">
+                  <FaTwitter />
+                </div>
+                X/Twitter
+              </button>
+
+              <button
+                type="button"
+                onClick={handleEmail}
+                className="flex flex-col items-center text-xs text-gray-700 hover:text-black"
+              >
+                <div className="w-9 h-9 rounded-full border flex items-center justify-center mb-1">
+                  <FaEnvelope />
+                </div>
+                Email
+              </button>
+
+              <button
+                type="button"
+                onClick={handleInstagram}
+                className="flex flex-col items-center text-xs text-gray-700 hover:text-black"
+              >
+                <div className="w-9 h-9 rounded-full border flex items-center justify-center mb-1">
+                  <FaInstagram />
+                </div>
+                Instagram
+              </button>
+
+              <button
+                type="button"
+                onClick={handleTiktok}
+                className="flex flex-col items-center text-xs text-gray-700 hover:text-black"
+              >
+                <div className="w-9 h-9 rounded-full border flex items-center justify-center mb-1">
+                  <SiTiktok />
+                </div>
+                TikTok
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <p className="text-xs text-gray-600 mb-1">
+              Message + link to share
+            </p>
+            <textarea
+              readOnly
+              value={shareText}
+              className="w-full border rounded px-2 py-2 text-xs bg-gray-50 h-20 resize-none text-gray-800"
+            />
+            <div className="mt-2 flex gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={() => copyTextAndNotify()}
+                className="px-3 py-1 rounded-full bg-gray-900 text-white text-xs font-medium hover:bg-black"
+              >
+                Copy message + link
+              </button>
+              <button
+                type="button"
+                onClick={copyLinkOnly}
+                className="px-3 py-1 rounded-full border border-gray-300 text-xs font-medium hover:bg-gray-100 text-gray-700"
+              >
+                Copy link only
+              </button>
+            </div>
+          </div>
+
+          <p className="text-[11px] text-gray-500">
+            For WhatsApp, Facebook and X, the thumbnail comes from the VextUp
+            post page when you share this link. On Instagram and TikTok, we
+            copy the message to your clipboard and open their site/app so you
+            can paste it into a post, story or DM.
+          </p>
+        </div>
+      </div>
     </div>
   );
 }

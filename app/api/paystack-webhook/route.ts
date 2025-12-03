@@ -5,6 +5,11 @@ import { adminDb } from "@/lib/firebaseAdmin";
 
 /**
  * Universal Paystack webhook for both payments & payouts
+ *
+ * ⚠️ NOTE:
+ * - We no longer compute a flat 10% platform cut here.
+ * - Fee breakdown (platformFee / providerAmount) is handled in /api/confirm-booking
+ *   and on the booking document itself.
  */
 export async function POST(req: Request) {
   try {
@@ -32,50 +37,31 @@ export async function POST(req: Request) {
     // === 1️⃣ Booking Payment (charge.success) ===
     if (event === "charge.success" && data.status === "success") {
       const bookingId = data.metadata?.bookingId;
+
       if (!bookingId) {
         console.warn("⚠️ charge.success without bookingId metadata");
       } else {
         const bookingRef = adminDb.collection("bookings").doc(bookingId);
 
-        // ✅ Update booking record
+        const amountPaid = typeof data.amount === "number" ? data.amount / 100 : null;
+
+        // ✅ Mark booking as paid/confirmed &
+        //    store Paystack reference + raw payload (no commission math here)
         await bookingRef.set(
           {
             status: "confirmed",
-            paymentReference: data.reference,
-            updatedAt: new Date(),
+            paymentRef: data.reference,
+            paymentReference: data.reference, // legacy field name, kept for compatibility
+            paymentMethod: "paystack",
+            paymentStatus: "success",
+            amountPaid,
+            currency: data.currency || "KES",
+            paystackEvent: event,
+            paystackData: data,
+            updatedAt: Date.now(),
           },
-          { merge: true }
+          { merge: true },
         );
-
-        // ✅ Update provider balance
-        const providerUid = data.metadata?.providerUid;
-        const amount = data.amount / 100; // Convert from kobo
-        const platformCut = amount * 0.1;
-        const providerAmount = amount - platformCut;
-
-        if (providerUid) {
-          await adminDb
-            .collection("users")
-            .doc(providerUid)
-            .set(
-              {
-                wallet: {
-                  available: adminDb.FieldValue.increment(providerAmount),
-                },
-              },
-              { merge: true }
-            );
-
-          await adminDb
-            .collection("platform")
-            .doc("earnings")
-            .set(
-              {
-                totalEarnings: adminDb.FieldValue.increment(platformCut),
-              },
-              { merge: true }
-            );
-        }
       }
     }
 
@@ -88,7 +74,11 @@ export async function POST(req: Request) {
         .get();
 
       if (indexDoc.exists) {
-        const { providerId, withdrawalId } = indexDoc.data();
+        const { providerId, withdrawalId } = indexDoc.data() as {
+          providerId: string;
+          withdrawalId: string;
+        };
+
         const wRef = adminDb
           .collection("users")
           .doc(providerId)
@@ -106,7 +96,7 @@ export async function POST(req: Request) {
               transaction_date: data.transferred_at || new Date(),
             },
           },
-          { merge: true }
+          { merge: true },
         );
 
         console.log(`✅ Withdrawal ${withdrawalId} marked as success.`);
@@ -124,7 +114,10 @@ export async function POST(req: Request) {
         .get();
 
       if (indexDoc.exists) {
-        const { providerId, withdrawalId } = indexDoc.data();
+        const { providerId, withdrawalId } = indexDoc.data() as {
+          providerId: string;
+          withdrawalId: string;
+        };
 
         const wRef = adminDb
           .collection("users")
@@ -142,7 +135,7 @@ export async function POST(req: Request) {
               reason: data.reason || "Transfer failed or reversed",
             },
           },
-          { merge: true }
+          { merge: true },
         );
 
         console.log(`❌ Withdrawal ${withdrawalId} marked as failed/reversed.`);
@@ -157,7 +150,7 @@ export async function POST(req: Request) {
     console.error("⚠️ Paystack Webhook Error:", err);
     return NextResponse.json(
       { error: "Webhook processing error" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

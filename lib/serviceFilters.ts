@@ -125,6 +125,7 @@ function inferImpliedGender(cat: ServiceCategory): Gender | undefined {
   if (cat.family === 'hair-men') return 'male';
   if (cat.family === 'hair-women') return 'female';
   if (cat.family === 'hair-kids') return 'unisex';
+  if (cat.family === 'hair-unisex') return 'unisex';
   if (cat.family === 'nails') return 'female';
   return undefined;
 }

@@ -130,6 +130,7 @@ export type ServiceFamilyId =
   | 'hair-men'
   | 'hair-women'
   | 'hair-kids'
+  | 'hair-unisex'
   | 'nails'
   | 'makeup'
   | 'lashes-brows'
@@ -409,10 +410,10 @@ export const SERVICE_CATEGORIES: ServiceCategory[] = [
     },
   },
 
-  /* -------------------- Hair – Kids (unisex) -------------------- */
+  /* -------------------- Hair – Kids (unisex, but label just "Kids") -------------------- */
   {
     id: 'hair-kids',
-    label: 'Kids hair (unisex)',
+    label: 'Kids',
     family: 'hair-kids',
     groupLabel: 'Hair',
     subcategories: [
@@ -434,8 +435,45 @@ export const SERVICE_CATEGORIES: ServiceCategory[] = [
     ],
     supportedFacets: {
       gender: true,
-      ageGroup: false, // age is implied as kids
+      ageGroup: false, // age is implied as kids; gender filter handles boys/girls
       hairColors: false,
+      hairLength: true,
+      hairTexture: true,
+      nailShapes: false,
+      nailLength: false,
+    },
+  },
+
+  /* -------------------- Hair – Unisex styles (locs / plaiting for all genders) -------------------- */
+  {
+    id: 'hair-unisex-general',
+    label: 'Unisex hairstyles',
+    family: 'hair-unisex',
+    groupLabel: 'Hair',
+    subcategories: [
+      {
+        id: 'locs-maintenance-unisex',
+        label: 'Loc maintenance / retouch (unisex)',
+        defaultGender: 'unisex',
+        defaultAgeGroup: 'adults',
+      },
+      {
+        id: 'starter-locs-unisex',
+        label: 'Starter locs (unisex)',
+        defaultGender: 'unisex',
+        defaultAgeGroup: 'adults',
+      },
+      {
+        id: 'braids-unisex',
+        label: 'Braids / cornrows (unisex styles)',
+        defaultGender: 'unisex',
+        defaultAgeGroup: 'adults',
+      },
+    ],
+    supportedFacets: {
+      gender: true,
+      ageGroup: true,
+      hairColors: true,
       hairLength: true,
       hairTexture: true,
       nailShapes: false,

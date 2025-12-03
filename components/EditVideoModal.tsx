@@ -1,8 +1,26 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { db } from '../lib/firebase';
 import { doc, updateDoc } from 'firebase/firestore';
+
+import {
+  SERVICE_CATEGORIES,
+  SERVICE_CATEGORY_BY_ID,
+  HAIR_COLOR_OPTIONS,
+  NAIL_SHAPE_OPTIONS,
+  NAIL_LENGTH_OPTIONS,
+  AGE_GROUP_OPTIONS,
+  GENDER_OPTIONS,
+  type ServiceCategory,
+  type ServiceSubcategory,
+  type ServiceSupportedFacets,
+  type GenderId,
+  type AgeGroupId,
+  type HairColorId,
+  type NailShapeId,
+  type NailLengthId,
+} from '@/lib/serviceConfig';
 
 interface Addon {
   name: string;
@@ -10,69 +28,371 @@ interface Addon {
   unit: string;
 }
 
+const DEFAULT_FACETS: ServiceSupportedFacets = {
+  gender: false,
+  ageGroup: false,
+  hairColors: false,
+  hairLength: false,
+  hairTexture: false,
+  nailShapes: false,
+  nailLength: false,
+};
+
+// For edit we mirror upload: no "any" option for gender/age.
+const EDIT_GENDER_OPTIONS = GENDER_OPTIONS.filter((g) => g.id !== 'any');
+const EDIT_AGE_GROUP_OPTIONS = AGE_GROUP_OPTIONS.filter((a) => a.id !== 'any');
+
 export function EditVideoModal({
   video,
   onClose,
-  onSaved
+  onSaved,
 }: {
   video: any;
   onClose: () => void;
   onSaved?: () => void;
 }) {
-  const [title, setTitle] = useState(video.title || '');
-  const [description, setDescription] = useState(video.description || '');
-  const [cost, setCost] = useState(video.serviceCost || 0);
-  const [hours, setHours] = useState(video.timeTaken?.hours || 0);
-  const [minutes, setMinutes] = useState(video.timeTaken?.minutes || 0);
+  // basic fields
+  const [title, setTitle] = useState<string>(video.title || '');
+  const [description, setDescription] = useState<string>(
+    video.description || '',
+  );
+  const [cost, setCost] = useState<number>(video.serviceCost || 0);
+  const [hours, setHours] = useState<number>(video.timeTaken?.hours || 0);
+  const [minutes, setMinutes] = useState<number>(video.timeTaken?.minutes || 0);
+
+  // extras / upsells
   const [addons, setAddons] = useState<Addon[]>(video.addons || []);
   const [addonName, setAddonName] = useState('');
   const [addonCost, setAddonCost] = useState(0);
   const [addonUnit, setAddonUnit] = useState('');
 
+  // booking helpers
+  const [specialInstructions, setSpecialInstructions] = useState<string>(
+    video.specialInstructions || '',
+  );
+
+  // service scope
+  const [includes, setIncludes] = useState<string[]>(
+    video.serviceIncludes || [],
+  );
+  const [includesInput, setIncludesInput] = useState('');
+  const [notProvided, setNotProvided] = useState<string[]>(
+    video.notProvided || [],
+  );
+  const [notProvidedInput, setNotProvidedInput] = useState('');
+
+  // discovery metadata
+  const [categoryId, setCategoryId] = useState<string>(
+    video.categoryId || '',
+  );
+  const [subcategoryId, setSubcategoryId] = useState<string>(
+    video.subcategoryId || '',
+  );
+
+  // NEW: extra subcategories for this service
+  const [extraSubcategoryIds, setExtraSubcategoryIds] = useState<string[]>(() => {
+    const raw = (video.subcategoryIds as string[]) || [];
+    const primary = video.subcategoryId as string | undefined;
+    if (!primary) return raw || [];
+    return raw.filter((id) => id && id !== primary);
+  });
+
+  const [bestForGender, setBestForGender] = useState<GenderId | ''>(
+    (video.targetGender as GenderId) || '',
+  );
+  const [bestForAgeGroup, setBestForAgeGroup] = useState<AgeGroupId | ''>(
+    (video.targetAgeGroup as AgeGroupId) || '',
+  );
+
+  const [hairColorIds, setHairColorIds] = useState<HairColorId[]>(
+    (video.hairColors as HairColorId[]) || [],
+  );
+  const [nailShapeIds, setNailShapeIds] = useState<NailShapeId[]>(
+    (video.nailShapes as NailShapeId[]) || [],
+  );
+  const [nailLengthId, setNailLengthId] = useState<NailLengthId | ''>(
+    (video.nailLength as NailLengthId) || '',
+  );
+
+  // ------------------ derive category + facets ------------------
+
+  const selectedCategory: ServiceCategory | null = useMemo(
+    () => (categoryId ? SERVICE_CATEGORY_BY_ID[categoryId] || null : null),
+    [categoryId],
+  );
+
+  const subcategories: ServiceSubcategory[] =
+    selectedCategory?.subcategories ?? [];
+
+  const selectedSubcategory: ServiceSubcategory | null = useMemo(
+    () => subcategories.find((s) => s.id === subcategoryId) || null,
+    [subcategories, subcategoryId],
+  );
+
+  const activeFacets: ServiceSupportedFacets = useMemo(() => {
+    if (!selectedCategory) return { ...DEFAULT_FACETS };
+    let facets: ServiceSupportedFacets = {
+      ...DEFAULT_FACETS,
+      ...selectedCategory.supportedFacets,
+    };
+    if (selectedSubcategory?.supportedFacetsOverride) {
+      facets = { ...facets, ...selectedSubcategory.supportedFacetsOverride };
+    }
+    return facets;
+  }, [selectedCategory, selectedSubcategory]);
+
+  // When category changes, reset subcategory + keep extras valid
+  useEffect(() => {
+    if (!selectedCategory) {
+      setSubcategoryId('');
+      setExtraSubcategoryIds([]);
+      // do not automatically clear facet choices to avoid surprises
+      return;
+    }
+
+    // default to first subcategory if none selected
+    if (!subcategoryId && selectedCategory.subcategories.length > 0) {
+      setSubcategoryId(selectedCategory.subcategories[0].id);
+    }
+
+    // keep extras in range of this category
+    setExtraSubcategoryIds((prev) =>
+      prev.filter((id) =>
+        selectedCategory.subcategories.some((s) => s.id === id),
+      ),
+    );
+  }, [selectedCategory, subcategoryId]);
+
+  // When subcategory changes, apply default gender/age if still blank
+  useEffect(() => {
+    if (!selectedSubcategory) return;
+    if (!bestForGender && selectedSubcategory.defaultGender) {
+      setBestForGender(selectedSubcategory.defaultGender);
+    }
+    if (!bestForAgeGroup && selectedSubcategory.defaultAgeGroup) {
+      setBestForAgeGroup(selectedSubcategory.defaultAgeGroup);
+    }
+  }, [selectedSubcategory, bestForGender, bestForAgeGroup]);
+
+  // ------------------ helpers ------------------
+
+  const toggleHairColor = (id: HairColorId) => {
+    setHairColorIds((prev) =>
+      prev.includes(id) ? prev.filter((v) => v !== id) : [...prev, id],
+    );
+  };
+
+  const toggleNailShape = (id: NailShapeId) => {
+    setNailShapeIds((prev) =>
+      prev.includes(id) ? prev.filter((v) => v !== id) : [...prev, id],
+    );
+  };
+
+  const toggleExtraSubcategory = (id: string) => {
+    setExtraSubcategoryIds((prev) => {
+      if (prev.includes(id)) {
+        return prev.filter((x) => x !== id);
+      }
+      return [...prev, id];
+    });
+  };
+
   const handleAddAddon = () => {
     const trimmedName = addonName.trim();
     const trimmedUnit = addonUnit.trim();
     if (trimmedName && trimmedUnit && addonCost > 0) {
-      setAddons(prev => [...prev, { name: trimmedName, cost: addonCost, unit: trimmedUnit }]);
+      setAddons((prev) => [
+        ...prev,
+        { name: trimmedName, cost: addonCost, unit: trimmedUnit },
+      ]);
       setAddonName('');
       setAddonCost(0);
       setAddonUnit('');
     }
   };
 
-  const handleSave = async () => {
-    const validAddons = addons.filter(a => a.name && a.unit && a.cost > 0);
+  const addInclude = () => {
+    const t = includesInput.trim();
+    if (!t) return;
+    setIncludes((p) => [...p, t]);
+    setIncludesInput('');
+  };
+  const removeInclude = (i: number) =>
+    setIncludes((p) => p.filter((_, idx) => idx !== i));
 
-    await updateDoc(doc(db, 'videos', video.id), {
-      title,
-      description,
+  const addNotProvided = () => {
+    const t = notProvidedInput.trim();
+    if (!t) return;
+    setNotProvided((p) => [...p, t]);
+    setNotProvidedInput('');
+  };
+  const removeNotProvided = (i: number) =>
+    setNotProvided((p) => p.filter((_, idx) => idx !== i));
+
+  // ------------------ save ------------------
+
+  const handleSave = async () => {
+    const validAddons = addons.filter(
+      (a) => a.name && a.unit && a.cost > 0,
+    );
+
+    const payload: any = {
+      title: title.trim(),
+      description: description.trim(),
       serviceCost: cost,
       timeTaken: { hours, minutes },
       addons: validAddons,
-    });
+      specialInstructions: specialInstructions.trim() || null,
+      serviceIncludes: includes,
+      notProvided,
+    };
+
+    if (categoryId && selectedCategory && selectedSubcategory) {
+      const resolvedGender: GenderId | undefined =
+        bestForGender || selectedSubcategory.defaultGender;
+      const resolvedAgeGroup: AgeGroupId | undefined =
+        bestForAgeGroup || selectedSubcategory.defaultAgeGroup;
+
+      // multi-subcategory support: primary + extras
+      const allSubcategoryIdsRaw = [
+        selectedSubcategory.id,
+        ...extraSubcategoryIds,
+      ];
+      const allSubcategoryIds = Array.from(
+        new Set(allSubcategoryIdsRaw.filter(Boolean)),
+      ) as string[];
+
+      const allSubcategoryLabels = allSubcategoryIds.map((id) => {
+        const sub = subcategories.find((s) => s.id === id);
+        return sub?.label || id;
+      });
+
+      payload.categoryId = categoryId;
+      payload.categoryLabel = selectedCategory.label;
+      // keep single fields for backwards compatibility
+      payload.subcategoryId = selectedSubcategory.id;
+      payload.subcategoryLabel = selectedSubcategory.label;
+      // new array fields
+      payload.subcategoryIds = allSubcategoryIds;
+      payload.subcategoryLabels = allSubcategoryLabels;
+
+      payload.targetGender = resolvedGender || null;
+      payload.targetAgeGroup = resolvedAgeGroup || null;
+      payload.hairColors = activeFacets.hairColors ? hairColorIds : [];
+      payload.nailShapes = activeFacets.nailShapes ? nailShapeIds : [];
+      payload.nailLength = activeFacets.nailLength
+        ? nailLengthId || null
+        : null;
+    }
+
+    await updateDoc(doc(db, 'videos', video.id), payload);
 
     onClose();
     onSaved?.();
   };
 
+  // group categories by groupLabel for nicer dropdown
+  const categoriesByGroup = useMemo(() => {
+    const map = new Map<string, ServiceCategory[]>();
+    for (const cat of SERVICE_CATEGORIES) {
+      const key = cat.groupLabel || 'Other';
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(cat);
+    }
+    return Array.from(map.entries());
+  }, []);
+
   return (
     <div className="fixed inset-0 z-50 bg-black bg-opacity-70 flex items-center justify-center">
-      <div className="bg-white text-black p-6 rounded-lg w-[360px] space-y-4">
+      <div className="bg-white text-black p-6 rounded-lg w-[380px] max-h-[90vh] overflow-y-auto space-y-4">
         <h2 className="text-xl font-semibold">Edit Service Details</h2>
 
+        {/* Title & description */}
         <input
           className="w-full px-3 py-2 border rounded text-black"
           placeholder="Title"
           value={title}
-          onChange={e => setTitle(e.target.value)}
+          onChange={(e) => setTitle(e.target.value)}
         />
         <textarea
           className="w-full px-3 py-2 border rounded text-black"
           placeholder="Description"
           value={description}
-          onChange={e => setDescription(e.target.value)}
+          onChange={(e) => setDescription(e.target.value)}
         />
 
+        {/* Category + subcategory */}
+        <div className="space-y-2">
+          <label className="block text-sm font-medium mb-1">
+            Service category
+          </label>
+          <select
+            className="w-full px-3 py-2 border rounded text-sm"
+            value={categoryId}
+            onChange={(e) => setCategoryId(e.target.value)}
+          >
+            <option value="">Select category…</option>
+            {categoriesByGroup.map(([group, cats]) => (
+              <optgroup key={group} label={group}>
+                {cats.map((cat) => (
+                  <option key={cat.id} value={cat.id}>
+                    {cat.label}
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+
+          {selectedCategory && (
+            <>
+              <label className="block text-sm font-medium mb-1">
+                Service type / subcategory
+              </label>
+              <select
+                className="w-full px-3 py-2 border rounded text-sm"
+                value={subcategoryId}
+                onChange={(e) => setSubcategoryId(e.target.value)}
+              >
+                {subcategories.map((sub) => (
+                  <option key={sub.id} value={sub.id}>
+                    {sub.label}
+                  </option>
+                ))}
+              </select>
+
+              {/* Extra subcategories */}
+              {subcategories.length > 1 && (
+                <div className="mt-2">
+                  <p className="text-xs font-medium mb-1">
+                    Also fits under (optional)
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {subcategories.map((sub) => {
+                      if (sub.id === subcategoryId) return null; // skip primary
+                      const checked = extraSubcategoryIds.includes(sub.id);
+                      return (
+                        <button
+                          key={sub.id}
+                          type="button"
+                          onClick={() => toggleExtraSubcategory(sub.id)}
+                          className={`px-3 py-1 rounded-full text-xs border ${
+                            checked
+                              ? 'bg-gray-900 text-white border-gray-900'
+                              : 'bg-white text-gray-800 border-gray-300'
+                          }`}
+                        >
+                          {sub.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Price + duration */}
         <div className="flex items-center space-x-2">
           <div className="flex items-center">
             <span className="mr-1 font-semibold">KSHS</span>
@@ -80,8 +400,9 @@ export function EditVideoModal({
               type="number"
               className="w-24 px-2 py-1 border rounded text-black"
               value={cost}
-              onChange={e => setCost(+e.target.value)}
+              onChange={(e) => setCost(+e.target.value || 0)}
               placeholder="Price"
+              min={0}
             />
           </div>
           <div className="flex items-center space-x-2">
@@ -93,7 +414,7 @@ export function EditVideoModal({
                 max={12}
                 className="w-16 px-2 py-1 border rounded text-black text-center"
                 value={hours}
-                onChange={e => setHours(+e.target.value)}
+                onChange={(e) => setHours(+e.target.value || 0)}
               />
             </label>
             <label className="flex flex-col text-sm">
@@ -105,27 +426,284 @@ export function EditVideoModal({
                 step={15}
                 className="w-16 px-2 py-1 border rounded text-black text-center"
                 value={minutes}
-                onChange={e => setMinutes(+e.target.value)}
+                onChange={(e) => setMinutes(+e.target.value || 0)}
               />
             </label>
           </div>
         </div>
 
+        {/* Special instructions */}
+        <label className="block">
+          <span className="block text-sm font-medium mb-1">
+            Special instructions (shown to client during booking)
+          </span>
+          <textarea
+            className="w-full px-3 py-2 border rounded text-sm"
+            placeholder="E.g., Arrive 10 minutes early, bring reference photos, etc."
+            value={specialInstructions}
+            onChange={(e) => setSpecialInstructions(e.target.value)}
+          />
+        </label>
+
+        {/* Discovery facets */}
+        {selectedCategory && (
+          <div className="border rounded-lg p-3 space-y-3 bg-gray-50">
+            <p className="text-sm font-semibold">
+              Help clients discover this service
+            </p>
+
+            {activeFacets.gender && (
+              <div>
+                <p className="text-xs font-medium mb-1">
+                  Who is this service best suited for?
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {EDIT_GENDER_OPTIONS.map((g) => (
+                    <button
+                      key={g.id}
+                      type="button"
+                      onClick={() =>
+                        setBestForGender((prev) =>
+                          prev === (g.id as GenderId) ? '' : (g.id as GenderId),
+                        )
+                      }
+                      className={`px-3 py-1 rounded-full text-xs border ${
+                        bestForGender === g.id
+                          ? 'bg-gray-900 text-white border-gray-900'
+                          : 'bg-white text-gray-800 border-gray-300'
+                      }`}
+                    >
+                      {g.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {activeFacets.ageGroup && (
+              <div>
+                <p className="text-xs font-medium mb-1">
+                  Age group (optional)
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {EDIT_AGE_GROUP_OPTIONS.map((a) => (
+                    <button
+                      key={a.id}
+                      type="button"
+                      onClick={() =>
+                        setBestForAgeGroup((prev) =>
+                          prev === (a.id as AgeGroupId)
+                            ? ''
+                            : (a.id as AgeGroupId),
+                        )
+                      }
+                      className={`px-3 py-1 rounded-full text-xs border ${
+                        bestForAgeGroup === a.id
+                          ? 'bg-gray-900 text-white border-gray-900'
+                          : 'bg-white text-gray-800 border-gray-300'
+                      }`}
+                    >
+                      {a.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {activeFacets.hairColors && (
+              <div>
+                <p className="text-xs font-medium mb-1">Hair colours used</p>
+                <div className="flex flex-wrap gap-2">
+                  {HAIR_COLOR_OPTIONS.map((hc) => (
+                    <button
+                      key={hc.id}
+                      type="button"
+                      onClick={() => toggleHairColor(hc.id)}
+                      className={`px-3 py-1 rounded-full text-xs border ${
+                        hairColorIds.includes(hc.id)
+                          ? 'bg-gray-900 text-white border-gray-900'
+                          : 'bg-white text-gray-800 border-gray-300'
+                      }`}
+                    >
+                      {hc.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {activeFacets.nailShapes && (
+              <div>
+                <p className="text-xs font-medium mb-1">
+                  Nail shape (examples in this service)
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {NAIL_SHAPE_OPTIONS.map((ns) => (
+                    <button
+                      key={ns.id}
+                      type="button"
+                      onClick={() => toggleNailShape(ns.id)}
+                      className={`px-3 py-1 rounded-full text-xs border ${
+                        nailShapeIds.includes(ns.id)
+                          ? 'bg-gray-900 text-white border-gray-900'
+                          : 'bg-white text-gray-800 border-gray-300'
+                      }`}
+                    >
+                      {ns.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {activeFacets.nailLength && (
+              <div>
+                <p className="text-xs font-medium mb-1">
+                  Nail length (most examples)
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {NAIL_LENGTH_OPTIONS.map((nl) => (
+                    <button
+                      key={nl.id}
+                      type="button"
+                      onClick={() =>
+                        setNailLengthId((prev) =>
+                          prev === nl.id ? '' : nl.id,
+                        )
+                      }
+                      className={`px-3 py-1 rounded-full text-xs border ${
+                        nailLengthId === nl.id
+                          ? 'bg-gray-900 text-white border-gray-900'
+                          : 'bg-white text-gray-800 border-gray-300'
+                      }`}
+                    >
+                      {nl.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Service includes */}
+        <div className="border rounded p-3">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="font-semibold text-sm">Service includes</h3>
+          </div>
+          {includes.length > 0 && (
+            <ul className="mb-2 list-disc list-inside text-sm">
+              {includes.map((it, idx) => (
+                <li
+                  key={`include-${idx}-${it}`}
+                  className="flex items-center justify-between"
+                >
+                  <span>{it}</span>
+                  <button
+                    type="button"
+                    className="text-xs text-red-600 ml-2"
+                    onClick={() => removeInclude(idx)}
+                  >
+                    remove
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="flex space-x-2">
+            <input
+              type="text"
+              className="flex-1 px-2 py-1 border rounded text-sm"
+              placeholder="e.g., Wash & blow-dry"
+              value={includesInput}
+              onChange={(e) => setIncludesInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  addInclude();
+                }
+              }}
+            />
+            <button
+              type="button"
+              onClick={addInclude}
+              className="px-3 py-1 rounded bg-gray-800 text-white text-sm"
+            >
+              Add
+            </button>
+          </div>
+        </div>
+
+        {/* Not provided */}
+        <div className="border rounded p-3">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="font-semibold text-sm">Not provided</h3>
+          </div>
+          {notProvided.length > 0 && (
+            <ul className="mb-2 list-disc list-inside text-sm">
+              {notProvided.map((it, idx) => (
+                <li
+                  key={`notProvided-${idx}-${it}`}
+                  className="flex items-center justify-between"
+                >
+                  <span>{it}</span>
+                  <button
+                    type="button"
+                    className="text-xs text-red-600 ml-2"
+                    onClick={() => removeNotProvided(idx)}
+                  >
+                    remove
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="flex space-x-2">
+            <input
+              type="text"
+              className="flex-1 px-2 py-1 border rounded text-sm"
+              placeholder="e.g., Hair dyeing, dreadlock install"
+              value={notProvidedInput}
+              onChange={(e) => setNotProvidedInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  addNotProvided();
+                }
+              }}
+            />
+            <button
+              type="button"
+              onClick={addNotProvided}
+              className="px-3 py-1 rounded bg-gray-800 text-white text-sm"
+            >
+              Add
+            </button>
+          </div>
+        </div>
+
+        {/* Add-ons / extras */}
         <div className="border rounded p-3">
           <div className="flex justify-between items-center mb-2">
-            <h3 className="font-semibold">Add‑ons</h3>
+            <h3 className="font-semibold text-sm">Add-ons / Extras</h3>
             <button
               onClick={handleAddAddon}
               className="text-blue-600 font-bold text-xl leading-none"
+              type="button"
             >
               ➕
             </button>
           </div>
 
           {addons.map((a, idx) => (
-            <div key={idx} className="flex justify-between mb-1">
+            <div
+              key={`addon-${idx}-${a.name}`}
+              className="flex justify-between mb-1 text-sm"
+            >
               <span className="flex-1">{a.name}</span>
-              <span className="w-20 text-right">{a.cost.toFixed(0)}</span>
+              <span className="w-20 text-right">
+                {Number(a.cost || 0).toFixed(0)}
+              </span>
               <span className="ml-1">/ {a.unit}</span>
             </div>
           ))}
@@ -133,24 +711,24 @@ export function EditVideoModal({
           <div className="flex space-x-2 mt-2">
             <input
               type="text"
-              className="flex-1 px-2 py-1 border rounded text-black"
+              className="flex-1 px-2 py-1 border rounded text-sm"
               placeholder="Addon name"
               value={addonName}
-              onChange={e => setAddonName(e.target.value)}
+              onChange={(e) => setAddonName(e.target.value)}
             />
             <input
               type="number"
-              className="w-20 px-2 py-1 border rounded text-black"
+              className="w-20 px-2 py-1 border rounded text-sm"
               placeholder="Cost"
               value={addonCost}
-              onChange={e => setAddonCost(+e.target.value)}
+              onChange={(e) => setAddonCost(+e.target.value || 0)}
             />
             <input
               type="text"
-              className="w-20 px-2 py-1 border rounded text-black"
+              className="w-20 px-2 py-1 border rounded text-sm"
               placeholder="Unit"
               value={addonUnit}
-              onChange={e => setAddonUnit(e.target.value)}
+              onChange={(e) => setAddonUnit(e.target.value)}
             />
           </div>
         </div>
