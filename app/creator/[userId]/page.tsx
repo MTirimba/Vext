@@ -277,7 +277,6 @@ export default function CreatorProfilePage() {
                     {isFollowing ? 'Following' : 'Follow'}
                   </button>
                   <MessageButton
-                    currentUserId={user?.uid}
                     otherUserId={userId}
                     redirectToList
                   />

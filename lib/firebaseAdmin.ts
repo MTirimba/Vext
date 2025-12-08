@@ -9,6 +9,7 @@ import * as admin from 'firebase-admin';
  *  - FIREBASE_PRIVATE_KEY  (replace \n → real newlines)
  */
 function initAdminApp() {
+  // If already initialized, reuse existing app
   if (admin.apps.length) return admin.app();
 
   const projectId = process.env.FIREBASE_PROJECT_ID;
@@ -20,7 +21,7 @@ function initAdminApp() {
   if (!projectId || !clientEmail || !privateKey) {
     throw new Error(
       'Missing Firebase service account credentials. ' +
-      'Set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY in your environment.'
+        'Set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY in your environment.',
     );
   }
 
@@ -33,13 +34,29 @@ function initAdminApp() {
   });
 }
 
-// Ensure initialized
+// Ensure initialized on module load
 const app = initAdminApp();
 
 // 👇 exports (same names you already use)
 export const adminDb = admin.firestore();
 export const adminAuth = admin.auth();
-export const initAdmin = admin; // kept for compatibility
+
+/**
+ * Helper function for places that were doing:
+ *   const { adminDb } = initAdmin();
+ */
+export function initAdmin() {
+  // Make sure the app is initialized (in case this module is ever refactored)
+  if (!admin.apps.length) {
+    initAdminApp();
+  }
+
+  return {
+    admin,
+    adminDb,
+    adminAuth,
+  };
+}
 
 /**
  * Optional helper: verify an ID token from "Authorization: Bearer <token>"

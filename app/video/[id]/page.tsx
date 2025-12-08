@@ -14,7 +14,9 @@ interface VideoDoc {
 }
 
 export default function VideoPage() {
-  const { id } = useParams();
+  const params = useParams<{ id: string }>();
+  const id = params?.id;
+
   const [video, setVideo] = useState<VideoDoc | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -23,7 +25,7 @@ export default function VideoPage() {
 
     const fetchVideo = async () => {
       try {
-        const docRef = doc(db, "videos", id as string); // use Firestore ID directly
+        const docRef = doc(db, "videos", id); // id is a string here
         const docSnap = await getDoc(docRef);
 
         if (docSnap.exists()) {

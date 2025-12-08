@@ -54,12 +54,15 @@ import {
   type VideoDoc as AlgoVideoDoc,
 } from '@/lib/feedAlgo';
 
-// Shared config types
+// Shared config types & data
 import {
-  type CategoryId,
+  SERVICE_CATEGORIES,
   type HairColorId,
   type NailShapeId,
 } from '@/lib/serviceConfig';
+
+// Infer CategoryId from SERVICE_CATEGORIES instead of importing it
+type CategoryId = (typeof SERVICE_CATEGORIES)[number]['id'];
 
 // Filters dropdown component
 import ServiceFiltersDropdown, {
@@ -1323,7 +1326,7 @@ export default function VideoFeed() {
           <button
             type="button"
             onClick={handleClearSearchAndFilters}
-            className="px-3 py-1.5 rounded-full bg-white/10 border border-white/30 text-xs text-white hover:bg-white/20 flex items-center gap-2"
+            className="px-3 py-1.5 rounded-full bg-white/10 border border-white/30 text-xs text-white hover:bg-white/20 flex itemscenter gap-2"
           >
             <span>Clear search / filters</span>
             <FaTimes className="text-[10px]" />
@@ -1724,7 +1727,6 @@ export default function VideoFeed() {
       {bookingVideo && (
         <BookingModal
           video={bookingVideo}
-          creator={userProfiles[bookingVideo.userId!] ?? {}}
           onClose={() => setBookingVideo(null)}
         />
       )}
@@ -1850,7 +1852,7 @@ function PostShareModal({
   })();
 
   return (
-    <div className="fixed inset-0 z-[9999] bg-black/70 flex items-center justify-center">
+    <div className="fixed inset-0 z-[9999] bgblack/70 flex items-center justify-center">
       <div className="bg-white rounded-lg shadow-xl w-[95vw] max-w-md p-5">
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-sm font-semibold text-gray-900">

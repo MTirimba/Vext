@@ -3,13 +3,21 @@
 import { useState } from 'react';
 import { useLoadScript, GoogleMap, Marker } from '@react-google-maps/api';
 
+type AddressInfo = {
+  street?: string;
+  town?: string;
+  county?: string;
+};
+
+interface LocationPickerProps {
+  initialLatLng?: { lat: number; lng: number };
+  onLocationSelect: (lat: number, lng: number, address: AddressInfo) => void;
+}
+
 export default function LocationPicker({
   initialLatLng,
-  onLocationSelect
-}: {
-  initialLatLng?: { lat: number; lng: number };
-  onLocationSelect: (lat: number, lng: number) => void;
-}) {
+  onLocationSelect,
+}: LocationPickerProps) {
   const libraries = ['places'] as any;
 
   const { isLoaded, loadError } = useLoadScript({
@@ -18,28 +26,72 @@ export default function LocationPicker({
   });
 
   const [markerPos, setMarkerPos] = useState<{ lat: number; lng: number }>(
-    initialLatLng || { lat: -1.286389, lng: 36.817223 } // Default Nairobi
+    initialLatLng || { lat: -1.286389, lng: 36.817223 }, // Default Nairobi
   );
+
+  const callOnLocationSelect = (lat: number, lng: number) => {
+    // If Google Maps JS isn't ready, just send coordinates
+    if (typeof google === 'undefined' || !google.maps?.Geocoder) {
+      onLocationSelect(lat, lng, {});
+      return;
+    }
+
+    const geocoder = new google.maps.Geocoder();
+    geocoder.geocode({ location: { lat, lng } }, (results: any, status: any) => {
+      if (status === 'OK' && results && results[0]) {
+        const components = results[0].address_components || [];
+        let street = '';
+        let town = '';
+        let county = '';
+
+        components.forEach((c: any) => {
+          const types: string[] = c.types || [];
+          if (types.includes('route')) {
+            street = c.long_name;
+          } else if (
+            types.includes('sublocality') ||
+            types.includes('sublocality_level_1') ||
+            types.includes('neighborhood')
+          ) {
+            if (!town) town = c.long_name;
+          } else if (types.includes('locality')) {
+            if (!town) town = c.long_name;
+          } else if (types.includes('administrative_area_level_2')) {
+            county = c.long_name;
+          }
+        });
+
+        onLocationSelect(lat, lng, {
+          street,
+          town,
+          county,
+        });
+      } else {
+        // Fallback: no address details
+        onLocationSelect(lat, lng, {});
+      }
+    });
+  };
 
   const handleMapClick = (ev: google.maps.MapMouseEvent) => {
     if (ev.latLng) {
       const lat = ev.latLng.lat();
       const lng = ev.latLng.lng();
       setMarkerPos({ lat, lng });
-      onLocationSelect(lat, lng);
+      callOnLocationSelect(lat, lng);
     }
   };
 
   const useCurrentLocation = () => {
     if (!navigator.geolocation) return alert('Geolocation not supported');
     navigator.geolocation.getCurrentPosition(
-      pos => {
+      (pos) => {
         const lat = pos.coords.latitude;
         const lng = pos.coords.longitude;
         setMarkerPos({ lat, lng });
-        onLocationSelect(lat, lng);
+        callOnLocationSelect(lat, lng);
       },
-      () => alert('Unable to fetch location')
+      () => alert('Unable to fetch location'),
     );
   };
 
@@ -62,12 +114,12 @@ export default function LocationPicker({
           <Marker
             position={markerPos}
             draggable
-            onDragEnd={e => {
+            onDragEnd={(e) => {
               if (e.latLng) {
                 const lat = e.latLng.lat();
                 const lng = e.latLng.lng();
                 setMarkerPos({ lat, lng });
-                onLocationSelect(lat, lng);
+                callOnLocationSelect(lat, lng);
               }
             }}
           />
@@ -75,7 +127,7 @@ export default function LocationPicker({
       </div>
 
       <p className="text-sm text-gray-600">
-        Location link:{" "}
+        Location link:{' '}
         <a
           href={`https://www.google.com/maps?q=${markerPos.lat},${markerPos.lng}`}
           target="_blank"

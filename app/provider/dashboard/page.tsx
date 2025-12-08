@@ -1,3 +1,4 @@
+// /workspaces/Vext/app/provider/dashboard/page.tsx
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
@@ -11,6 +12,8 @@ import {
   doc,
   getDoc,
   getDocs,
+  setDoc,
+  deleteDoc,
 } from 'firebase/firestore';
 import {
   motion,
@@ -18,9 +21,12 @@ import {
   useMotionValue,
   useTransform,
 } from 'framer-motion';
+import Calendar from 'react-calendar';
+import 'react-calendar/dist/Calendar.css';
 import WithdrawModal from '@/components/WithdrawModal';
 import WithdrawalHistory from '@/components/WithdrawalHistory';
 import PayoutSettingsModal from '@/components/PayoutSettingsModal';
+import { useRouter } from 'next/navigation';
 
 type BookingSummary = {
   total: number;
@@ -45,11 +51,18 @@ type ClientStat = {
   bookings: number;
 };
 
+type AwayDay = {
+  date: string; // YYYY-MM-DD
+  fullDay?: boolean;
+  createdAt?: number;
+};
+
 export default function ProviderDashboard() {
   const [user] = useAuthState(auth);
+  const router = useRouter();
 
   // ----- UI tabs -----
-  const [activeTab, setActiveTab] = useState<'wallet' | 'stats'>('wallet');
+  const [activeTab, setActiveTab] = useState<'wallet' | 'stats' | 'availability'>('wallet');
 
   // ----- wallet state -----
   const [loading, setLoading] = useState(true);
@@ -98,9 +111,27 @@ export default function ProviderDashboard() {
     [videoStats],
   );
 
+  // ----- availability / away days state -----
+  const [awayDates, setAwayDates] = useState<string[]>([]);
+  const [availabilityLoading, setAvailabilityLoading] = useState(false);
+  const [selectedAvailabilityDate, setSelectedAvailabilityDate] = useState<Date>(
+    () => new Date(),
+  );
+
   useEffect(() => {
     motionBalance.set(balance);
   }, [balance, motionBalance]);
+
+  // Utility: date → YYYY-MM-DD (same as bookings use)
+  const dateToISO = (d: Date) => d.toISOString().split('T')[0];
+
+  const isPastDay = (d: Date) => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const cmp = new Date(d);
+    cmp.setHours(0, 0, 0, 0);
+    return cmp.getTime() < today.getTime();
+  };
 
   // ✅ Check payout settings
   useEffect(() => {
@@ -427,6 +458,33 @@ export default function ProviderDashboard() {
     })();
   }, [user]);
 
+  // 🔁 Live subscription for provider "away days"
+  useEffect(() => {
+    if (!user) return;
+    setAvailabilityLoading(true);
+    const colRef = collection(db, 'users', user.uid, 'awayDays');
+
+    const unsub = onSnapshot(
+      colRef,
+      (snap) => {
+        const list: string[] = [];
+        snap.forEach((d) => {
+          const data = d.data() as AwayDay;
+          const date = data.date || d.id;
+          if (date) list.push(date);
+        });
+        setAwayDates(list);
+        setAvailabilityLoading(false);
+      },
+      (err) => {
+        console.error('[PROVIDER_DASHBOARD] awayDays snapshot error', err);
+        setAvailabilityLoading(false);
+      },
+    );
+
+    return () => unsub();
+  }, [user]);
+
   if (!user) return <p className="p-6">Please sign in to view this page.</p>;
   if (loading && activeTab === 'wallet')
     return <p className="p-6">Loading balance…</p>;
@@ -442,6 +500,78 @@ export default function ProviderDashboard() {
       setShowPayoutSettings(true);
     }
   };
+
+  // Toggle an away day on the availability calendar
+  const handleToggleAwayDate = async (date: Date) => {
+    if (!user) return;
+    if (isPastDay(date)) {
+      alert('You cannot block off past dates.');
+      return;
+    }
+
+    const iso = dateToISO(date);
+    const currentlyAway = awayDates.includes(iso);
+    const ref = doc(db, 'users', user.uid, 'awayDays', iso);
+
+    // Removing away day
+    if (currentlyAway) {
+      try {
+        await deleteDoc(ref);
+      } catch (err) {
+        console.error('Failed to remove away day:', err);
+        alert('Could not remove this away day. Please try again.');
+      }
+      return;
+    }
+
+    // Before adding, check for existing bookings on this date
+    try {
+      const bookingsSnap = await getDocs(
+        query(
+          collection(db, 'bookings'),
+          where('providerId', '==', user.uid),
+          where('date', '==', iso),
+          where('status', 'in', ['pending', 'accepted', 'confirmed']),
+        ),
+      );
+
+      if (!bookingsSnap.empty) {
+        const count = bookingsSnap.size;
+        const ok = window.confirm(
+          `You already have ${count} active booking${
+            count === 1 ? '' : 's'
+          } on ${iso}.\n\nTo block this day off completely, you need to cancel or reschedule those bookings from your bookings page.\n\nOpen your bookings page now?`,
+        );
+        if (ok) {
+          router.push('/creator/bookings');
+        }
+        // Do NOT create away day if there are active bookings
+        return;
+      }
+
+      // No conflicting bookings — create the away day
+      await setDoc(ref, {
+        date: iso,
+        fullDay: true,
+        createdAt: Date.now(),
+      } satisfies AwayDay);
+    } catch (err) {
+      console.error('Failed to set away day:', err);
+      alert(
+        'Could not update your away day for this date. Please try again in a moment.',
+      );
+    }
+  };
+
+  // Derived list of upcoming away days for display
+  const upcomingAwayDays = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return awayDates
+      .map((d) => ({ date: d, asDate: new Date(d) }))
+      .filter((x) => x.asDate.getTime() >= today.getTime())
+      .sort((a, b) => a.asDate.getTime() - b.asDate.getTime());
+  }, [awayDates]);
 
   return (
     <div className="p-6 max-w-2xl mx-auto">
@@ -470,10 +600,21 @@ export default function ProviderDashboard() {
           >
             Statistics
           </button>
+          <button
+            onClick={() => setActiveTab('availability')}
+            className={`px-4 py-1.5 text-sm rounded-full ${
+              activeTab === 'availability'
+                ? 'bg-white shadow text-green-700 font-semibold'
+                : 'text-gray-600 hover:text-gray-800'
+            }`}
+          >
+            Availability
+          </button>
         </div>
       </div>
 
-      {activeTab === 'wallet' ? (
+      {/* WALLET TAB */}
+      {activeTab === 'wallet' && (
         <>
           {/* Wallet balance */}
           <div className="p-6 bg-white shadow rounded mb-4">
@@ -598,7 +739,10 @@ export default function ProviderDashboard() {
           {/* Withdrawal history */}
           <WithdrawalHistory />
         </>
-      ) : (
+      )}
+
+      {/* STATS TAB */}
+      {activeTab === 'stats' && (
         <div className="space-y-6">
           {statsLoading && (
             <p className="text-sm text-gray-600">Loading statistics…</p>
@@ -744,6 +888,88 @@ export default function ProviderDashboard() {
                 )}
               </div>
             </>
+          )}
+        </div>
+      )}
+
+      {/* AVAILABILITY TAB */}
+      {activeTab === 'availability' && (
+        <div className="bg-white shadow rounded p-4 space-y-4">
+          <h2 className="font-semibold text-gray-800 mb-1">
+            Calendar & Time Off
+          </h2>
+          <p className="text-xs text-gray-600 mb-2">
+            Use this calendar to block off full days when you are away or not
+            accepting bookings. Clients will not be able to book you on these
+            days, in addition to days you have not selected in your profile
+            operating hours.
+          </p>
+
+          {availabilityLoading && (
+            <p className="text-xs text-gray-500 mb-2">
+              Loading your away days…
+            </p>
+          )}
+
+          <div className="flex flex-col items-center">
+            <Calendar
+              onChange={(d) => {
+                setSelectedAvailabilityDate(d as Date);
+              }}
+              onClickDay={(d) => handleToggleAwayDate(d)}
+              value={selectedAvailabilityDate}
+              tileClassName={({ date }) => {
+                const iso = dateToISO(date);
+                if (awayDates.includes(iso)) {
+                  return 'bg-red-50 text-red-700 react-calendar__tile--now';
+                }
+                return undefined;
+              }}
+              tileDisabled={({ date, view }) => {
+                if (view !== 'month') return false;
+                return isPastDay(date);
+              }}
+            />
+          </div>
+
+          <div className="text-xs text-gray-600">
+            <p className="mb-1 font-semibold">How it works:</p>
+            <ul className="list-disc list-inside space-y-1">
+              <li>
+                Click a future date to toggle it as <strong>away</strong> (red).
+              </li>
+              <li>
+                Away days are treated as fully unavailable on the booking
+                calendar.
+              </li>
+              <li>
+                If you already have confirmed or pending bookings on a date, you
+                will be asked to manage them from your bookings page instead of
+                blocking the day.
+              </li>
+            </ul>
+          </div>
+
+          {upcomingAwayDays.length > 0 && (
+            <div className="mt-3 border-t pt-3">
+              <h3 className="text-sm font-semibold text-gray-800 mb-1">
+                Upcoming away days
+              </h3>
+              <ul className="text-xs text-gray-700 space-y-1">
+                {upcomingAwayDays.map((d) => (
+                  <li key={d.date} className="flex justify-between">
+                    <span>{new Date(d.date).toDateString()}</span>
+                    <button
+                      type="button"
+                      onClick={() => handleToggleAwayDate(d.asDate)}
+                      className="text-red-600 hover:text-red-800"
+                    >
+                      Remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
         </div>
       )}

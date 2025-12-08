@@ -256,8 +256,8 @@ function MessagesList() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const openWith = searchParams.get('openWith'); // redirect case
-  const activeConversationId = searchParams.get('conversationId');
+  const openWith = searchParams?.get('openWith') ?? null; // redirect case
+  const activeConversationId = searchParams?.get('conversationId') ?? null;
 
   useEffect(() => {
     if (!user) return;

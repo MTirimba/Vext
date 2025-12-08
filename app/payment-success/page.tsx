@@ -8,9 +8,9 @@ function PaymentSuccessInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
-  const bookingId = searchParams.get('bookingId') || '';
-  const status = searchParams.get('status') || '';
-  const amount = searchParams.get('amount') || '';
+  const bookingId = searchParams?.get('bookingId') ?? '';
+  const status = searchParams?.get('status') ?? '';
+  const amount = searchParams?.get('amount') ?? '';
 
   const [bookingDetails, setBookingDetails] = useState<any>(null);
 

@@ -1,7 +1,9 @@
+// /workspaces/Vext/lib/serverNotifications.ts
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
 import crypto from "crypto";
-import { createUserNotification } from "@/lib/serverNotifications";
+// ❌ removed incorrect self-import of createUserNotification
+// import { createUserNotification } from "@/lib/serverNotifications";
 
 // helper: generate short code like "42AB"
 function generateShortId() {
@@ -188,4 +190,47 @@ export async function POST(req: NextRequest) {
       { status: 500 },
     );
   }
+}
+
+/**
+ * ✅ Exported helper used by other API routes to create user notifications.
+ */
+export async function createUserNotification(
+  userId: string,
+  payload: {
+    type: string;
+    role?: string;
+    bookingId?: string;
+    bookingStatus?: string;
+    message: string;
+    data?: Record<string, unknown>;
+  },
+) {
+  const now = Date.now();
+
+  const ref = adminDb
+    .collection("users")
+    .doc(userId)
+    .collection("notifications")
+    .doc();
+
+  const doc = {
+    userId,
+    type: payload.type,
+    role: payload.role ?? null,
+    bookingId: payload.bookingId ?? null,
+    bookingStatus: payload.bookingStatus ?? null,
+    message: payload.message,
+    data: payload.data ?? null,
+    read: false,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  await ref.set(doc);
+
+  return {
+    id: ref.id,
+    ...doc,
+  };
 }

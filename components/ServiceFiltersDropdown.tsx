@@ -15,8 +15,11 @@ import {
   type HairColorId,
   type NailShapeId,
   type NailLengthId,
-  type CategoryId,
 } from '@/lib/serviceConfig';
+
+// Infer CategoryId from SERVICE_CATEGORIES so we don't depend
+// on a missing export.
+type CategoryId = (typeof SERVICE_CATEGORIES)[number]['id'];
 
 export type FilterGender = GenderId | 'any';
 export type FilterAgeGroup = AgeGroupId | 'any';

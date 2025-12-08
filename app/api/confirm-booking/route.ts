@@ -2,16 +2,26 @@ import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
 
 /**
- * ✅ Confirm booking after successful payment (Paystack / M-Pesa / Pesapal)
+ * ✅ Confirm booking after successful payment (Paystack / M-Pesa / Pesapal / Wallet)
  * Uses stored markup/platform fee when available and updates booked slots.
  */
 export async function POST(req: NextRequest) {
   try {
-    const { bookingId, paymentRef, method, previousTime } = await req.json();
+    const { bookingId, paymentRef, method, previousTime, walletPay } =
+      await req.json();
 
-    if (!bookingId || !paymentRef || !method) {
+    // Basic validation: booking + method required
+    if (!bookingId || !method) {
       return NextResponse.json(
-        { error: "Missing bookingId, paymentRef, or method" },
+        { error: "Missing bookingId or method" },
+        { status: 400 },
+      );
+    }
+
+    // For external methods, a paymentRef is mandatory
+    if (method !== "wallet" && !paymentRef) {
+      return NextResponse.json(
+        { error: "Missing paymentRef for non-wallet payment method" },
         { status: 400 },
       );
     }
@@ -27,11 +37,19 @@ export async function POST(req: NextRequest) {
     }
 
     const booking = bookingSnap.data() as any;
-    const { providerId, date, time, total } = booking;
+    const { providerId, date, time, total, clientId } = booking;
 
     if (!providerId || !date || !time) {
       return NextResponse.json(
         { error: "Incomplete booking data" },
+        { status: 400 },
+      );
+    }
+
+    const totalNumber = Number(total);
+    if (!Number.isFinite(totalNumber) || totalNumber <= 0) {
+      return NextResponse.json(
+        { error: "Invalid booking total" },
         { status: 400 },
       );
     }
@@ -52,14 +70,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const totalNumber = Number(total);
-    if (!Number.isFinite(totalNumber) || totalNumber <= 0) {
-      return NextResponse.json(
-        { error: "Invalid booking total" },
-        { status: 400 },
-      );
-    }
-
     // ---------- 💰 Compute platform fee & provider amount ----------
     // Prefer explicit fields from saving/checkout step, then fall back gracefully.
 
@@ -73,15 +83,17 @@ export async function POST(req: NextRequest) {
 
     // Try direct platform fee fields first
     let platformFee = Number(
-      booking.platformFee ??
-        booking.markupAmount ??
-        booking.markupFee,
+      booking.platformFee ?? booking.markupAmount ?? booking.markupFee,
     );
 
     // If platform fee isn't explicitly stored, try to derive it
     if (!Number.isFinite(platformFee) || platformFee < 0) {
       // If we know the provider base and client total, difference is the fee
-      if (Number.isFinite(baseSubtotal) && baseSubtotal > 0 && totalNumber > baseSubtotal) {
+      if (
+        Number.isFinite(baseSubtotal) &&
+        baseSubtotal > 0 &&
+        totalNumber > baseSubtotal
+      ) {
         platformFee = +(totalNumber - baseSubtotal).toFixed(2);
       } else if (
         typeof booking.markupRate === "number" &&
@@ -113,10 +125,68 @@ export async function POST(req: NextRequest) {
     // Keep existing "commission" field name for backwards compatibility
     const commission = platformFee;
 
+    // ---------- 💰 Wallet flow (optional) ----------
+    let effectivePaymentRef: string | undefined = paymentRef;
+    let walletTxId: string | undefined;
+
+    if (method === "wallet" || walletPay) {
+      if (!clientId) {
+        return NextResponse.json(
+          { error: "Missing clientId for wallet payment" },
+          { status: 400 },
+        );
+      }
+
+      const walletTxCol = adminDb
+        .collection("users")
+        .doc(clientId)
+        .collection("walletTransactions");
+
+      // Compute wallet balance using completed transactions (same logic as client-side)
+      const walletSnap = await walletTxCol.get();
+      let balance = 0;
+      walletSnap.forEach((d) => {
+        const data = d.data() as any;
+        const status = (data.status || "").toLowerCase();
+        if (status !== "completed") return;
+        const amt = Number(data.amount) || 0;
+        const type = (data.type || "credit") as "credit" | "debit";
+        balance += type === "credit" ? amt : -amt;
+      });
+
+      if (balance < totalNumber) {
+        return NextResponse.json(
+          {
+            error:
+              "Insufficient wallet balance to pay for this booking. Please deposit more or use another method.",
+          },
+          { status: 400 },
+        );
+      }
+
+      // Create wallet debit transaction
+      const debitDoc = await walletTxCol.add({
+        amount: totalNumber,
+        type: "debit",
+        reason: "booking_payment",
+        bookingId,
+        status: "completed",
+        createdAt: Date.now(), // wallet page already handles Date/number/Timestamp
+        method: "wallet",
+      });
+
+      walletTxId = debitDoc.id;
+
+      // Use a synthetic paymentRef if none was provided
+      if (!effectivePaymentRef) {
+        effectivePaymentRef = `wallet:${walletTxId}`;
+      }
+    }
+
     // ✅ Update booking with payment + pricing breakdown
     await bookingRef.update({
       status: "confirmed",
-      paymentRef,
+      paymentRef: effectivePaymentRef ?? null,
       method,
       confirmedAt: Date.now(),
       commission, // legacy
@@ -155,13 +225,19 @@ export async function POST(req: NextRequest) {
       confirmedAt: Date.now(),
     });
 
-    return NextResponse.json({
+    const responseBody: any = {
       success: true,
       message: "Booking confirmed successfully",
       commission,
       providerAmount,
       platformFee,
-    });
+    };
+
+    if (walletTxId) {
+      responseBody.walletTxId = walletTxId;
+    }
+
+    return NextResponse.json(responseBody);
   } catch (err: any) {
     console.error("confirm-booking error:", err?.message || err);
     return NextResponse.json(

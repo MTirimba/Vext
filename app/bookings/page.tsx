@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState, useMemo } from "react";
+import { useRouter } from "next/navigation";
 import {
   collection,
   query,
@@ -10,13 +11,13 @@ import {
   updateDoc,
   addDoc,
   getDoc,
+  serverTimestamp,
 } from "firebase/firestore";
 import { db, auth } from "@/lib/firebase";
 import { useAuthState } from "react-firebase-hooks/auth";
 import Calendar from "react-calendar";
 import "react-calendar/dist/Calendar.css";
 import { FaWhatsapp, FaPhoneAlt, FaSortAmountDownAlt } from "react-icons/fa";
-import MessageButton from "@/components/MessageButton";
 
 interface Booking {
   id: string;
@@ -170,6 +171,8 @@ function compareBookings(a: Booking, b: Booking, mode: SortMode): number {
 
 export default function ClientBookings() {
   const [user] = useAuthState(auth);
+  const router = useRouter();
+
   const [active, setActive] = useState<
     (Booking & { video?: Video; provider?: UserProfile })[]
   >([]);
@@ -434,6 +437,53 @@ export default function ClientBookings() {
     return digits ? `https://wa.me/${digits}` : "";
   };
 
+  // 💬 start or open conversation with a provider
+  const startConversationWithProvider = async (providerId: string) => {
+    if (!user) {
+      alert("Please sign in to send a message.");
+      router.push("/login");
+      return;
+    }
+    if (!providerId) return;
+    if (user.uid === providerId) {
+      alert("You can't message yourself.");
+      return;
+    }
+
+    try {
+      const convSnap = await getDocs(
+        query(
+          collection(db, "conversations"),
+          where("participants", "array-contains", user.uid),
+        ),
+      );
+
+      let existingId: string | null = null;
+      convSnap.forEach((docSnap) => {
+        const data = docSnap.data() as { participants?: string[] };
+        if (data.participants?.includes(providerId)) {
+          existingId = docSnap.id;
+        }
+      });
+
+      let conversationId: string;
+      if (existingId) {
+        conversationId = existingId;
+      } else {
+        const newConvRef = await addDoc(collection(db, "conversations"), {
+          participants: [user.uid, providerId],
+          createdAt: serverTimestamp(),
+        });
+        conversationId = newConvRef.id;
+      }
+
+      router.push(`/messages?conversationId=${conversationId}`);
+    } catch (err) {
+      console.error("start conversation error", err);
+      alert("Could not open chat. Please try again.");
+    }
+  };
+
   const BookingCard = ({
     b,
     actions,
@@ -532,11 +582,15 @@ export default function ClientBookings() {
                   {/* 💬 Message provider on-platform */}
                   {user && b.providerId && (
                     <div className="ml-2">
-                      <MessageButton
-                        currentUserId={user.uid}
-                        otherUserId={b.providerId}
-                        redirectToList
-                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          startConversationWithProvider(b.providerId!)
+                        }
+                        className="px-3 py-1 rounded-full border border-gray-300 text-xs font-medium text-gray-700 hover:bg-gray-100"
+                      >
+                        Message
+                      </button>
                     </div>
                   )}
                 </div>

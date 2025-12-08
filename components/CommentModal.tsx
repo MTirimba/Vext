@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, useRef } from 'react';
+import { useEffect, useMemo, useState, useRef, type ReactNode } from 'react';
 import {
   collection, query, orderBy, where, getDocs, addDoc, doc, getDoc,
   updateDoc, deleteDoc, setDoc, limit
@@ -777,14 +777,16 @@ export function CommentModal({ videoId, onClose }: CommentModalProps) {
   };
 
   // render comment text with @mentions → profile links
-  function renderWithMentions(text: string, mentions?: Mention[]) {
+    // render comment text with @mentions → profile links
+  function renderWithMentions(text: string, mentions?: Mention[]): ReactNode {
     if (!text) return text;
     if (!mentions || mentions.length === 0) return text;
 
-    const parts: (string | JSX.Element)[] = [];
+    const parts: ReactNode[] = [];
     const regex = /@([A-Za-z0-9_]+)/g;
     let last = 0;
     let m: RegExpExecArray | null;
+
     while ((m = regex.exec(text)) !== null) {
       const start = m.index;
       const end = regex.lastIndex;
@@ -792,7 +794,7 @@ export function CommentModal({ videoId, onClose }: CommentModalProps) {
 
       if (start > last) parts.push(text.slice(last, start));
 
-      const target = mentions.find(x => x.username === uname);
+      const target = mentions.find((x) => x.username === uname);
       if (target) {
         parts.push(
           <a
@@ -802,13 +804,15 @@ export function CommentModal({ videoId, onClose }: CommentModalProps) {
             onClick={(e) => e.stopPropagation()}
           >
             @{uname}
-          </a>
+          </a>,
         );
       } else {
         parts.push(text.slice(start, end));
       }
+
       last = end;
     }
+
     if (last < text.length) parts.push(text.slice(last));
     return parts;
   }

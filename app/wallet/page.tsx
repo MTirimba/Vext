@@ -1,3 +1,4 @@
+// /workspaces/Vext/app/wallet/page.tsx
 'use client';
 
 import { useEffect, useState } from 'react';
@@ -9,6 +10,10 @@ import {
   orderBy,
   query,
 } from 'firebase/firestore';
+
+import WithdrawModal from '@/components/WithdrawModal';
+import WithdrawalHistory from '@/components/WithdrawalHistory';
+import WalletDepositModal from '@/components/WalletDepositModal';
 
 type WalletTx = {
   id: string;
@@ -26,14 +31,17 @@ export default function ClientWalletPage() {
   const [balance, setBalance] = useState(0);
   const [loading, setLoading] = useState(true);
 
+  const [showDeposit, setShowDeposit] = useState(false);
+  const [showWithdraw, setShowWithdraw] = useState(false);
+
   useEffect(() => {
     if (!user) return;
 
     const txRef = collection(db, 'users', user.uid, 'walletTransactions');
     const q = query(txRef, orderBy('createdAt', 'desc'));
 
-    const unsub = onSnapshot(q, snap => {
-      const txs: WalletTx[] = snap.docs.map(d => ({
+    const unsub = onSnapshot(q, (snap) => {
+      const txs: WalletTx[] = snap.docs.map((d) => ({
         id: d.id,
         ...(d.data() as any),
       }));
@@ -72,6 +80,12 @@ export default function ClientWalletPage() {
     if (tx.reason === 'provider_cancelled_booking') {
       return 'Refund from provider cancellation';
     }
+    if (tx.reason === 'wallet_deposit') {
+      return 'Wallet deposit';
+    }
+    if (tx.reason === 'wallet_withdraw') {
+      return 'Wallet withdrawal';
+    }
     return tx.reason || 'Wallet transaction';
   };
 
@@ -81,21 +95,43 @@ export default function ClientWalletPage() {
 
       {/* Balance card */}
       <div className="p-5 bg-white shadow rounded mb-6">
-        <h2 className="font-semibold text-gray-600">Available Wallet Balance</h2>
+        <h2 className="font-semibold text-gray-600">
+          Available Wallet Balance
+        </h2>
         <p className="text-3xl font-bold text-emerald-700 mt-2">
           KSH {balance.toFixed(2)}
         </p>
         <p className="text-xs text-gray-500 mt-2">
-          Funds appear here when a service provider rejects a paid booking or
-          when you cancel a paid booking. In future you can use this balance to
-          pay for new services or withdraw it.
+          Funds appear here when a service provider rejects a paid booking,
+          when you cancel an eligible paid booking, or when you deposit money
+          into your wallet. You can use this balance to pay for new services
+          or withdraw it to M-Pesa.
         </p>
+
+        {/* Actions */}
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => setShowDeposit(true)}
+            className="px-4 py-2 rounded bg-emerald-600 text-white text-sm hover:bg-emerald-700"
+          >
+            Deposit Funds
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowWithdraw(true)}
+            disabled={balance <= 0}
+            className="px-4 py-2 rounded bg-gray-800 text-white text-sm hover:bg-gray-900 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Withdraw Funds
+          </button>
+        </div>
       </div>
 
-      {/* Transactions list */}
+      {/* Transactions list (deposits, refunds & wallet debits) */}
       <div className="bg-white shadow rounded">
         <h2 className="px-4 py-3 border-b font-semibold text-gray-700">
-          Wallet Activity
+          Wallet Activity (deposits, refunds & debits)
         </h2>
 
         {transactions.length === 0 ? (
@@ -104,7 +140,7 @@ export default function ClientWalletPage() {
           </p>
         ) : (
           <ul className="divide-y">
-            {transactions.map(tx => {
+            {transactions.map((tx) => {
               const date =
                 tx.createdAt?.toDate?.() ??
                 (tx.createdAt ? new Date(tx.createdAt) : null);
@@ -153,6 +189,22 @@ export default function ClientWalletPage() {
           </ul>
         )}
       </div>
+
+      {/* Separate withdrawal history (M-Pesa payouts) */}
+      <div className="mt-6">
+        <WithdrawalHistory />
+      </div>
+
+      {/* Modals */}
+      {showDeposit && (
+        <WalletDepositModal onClose={() => setShowDeposit(false)} />
+      )}
+      {showWithdraw && (
+        <WithdrawModal
+          available={balance}
+          onClose={() => setShowWithdraw(false)}
+        />
+      )}
     </div>
   );
 }

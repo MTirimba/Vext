@@ -60,6 +60,15 @@ export default function ConversationPage() {
   const [user] = useAuthState(auth);
   const router = useRouter();
   const params = useParams<{ conversationId: string }>();
+
+  if (!params?.conversationId) {
+    return (
+      <div className="p-4">
+        <p className="text-gray-500">Invalid conversation.</p>
+      </div>
+    );
+  }
+  
   const conversationId = params.conversationId;
 
   const [messages, setMessages] = useState<Message[]>([]);

@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuthState } from 'react-firebase-hooks/auth';
 import { auth, db } from '../lib/firebase';
 import { doc, getDoc } from 'firebase/firestore';
-import { AuthModal } from './AuthModal';
+import AuthModal from './AuthModal';
 
 interface NavbarProps {
   onAuthClick?: () => void;
@@ -22,7 +22,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onAuthClick }) => {
   useEffect(() => {
     if (!user) return;
 
-    getDoc(doc(db, 'users', user.uid)).then(snap => {
+    getDoc(doc(db, 'users', user.uid)).then((snap) => {
       const data = snap.data();
       if (data) {
         setIsProvider(!!data.isProvider);

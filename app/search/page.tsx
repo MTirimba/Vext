@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, FormEvent } from 'react';
+import React, { useEffect, useMemo, useState, FormEvent } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import algoliasearch from 'algoliasearch/lite';
 import {
@@ -34,6 +34,7 @@ interface VideoHit {
   serviceCost?: number;
   userId?: string;
   contentType?: string;
+  [key: string]: any; // satisfy Algolia BaseHit index signature
 }
 
 interface UserProfile {
@@ -281,7 +282,7 @@ function PeopleList({
         // Decide where clicking takes you
         let target = '/';
         if (label === 'providers') {
-          // 👇 Pretty URL for providers: /{handle}
+          // Pretty URL for providers: /{handle}
           target = handle ? `/${handle}` : `/creator/${p.id}`;
         } else {
           // Personal profiles remain /u/{handle}
@@ -341,8 +342,9 @@ function SearchInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const initialQuery = (searchParams.get('q') || '').trim();
-  const initialTab = (searchParams.get('tab') as TabKey) || 'media';
+  const initialQuery = (searchParams?.get('q') ?? '').trim();
+  const tabParam = (searchParams?.get('tab') as TabKey | null) ?? null;
+  const initialTab: TabKey = tabParam ?? 'media';
 
   const [activeTab, setActiveTab] = useState<TabKey>(initialTab);
   const [query, setQuery] = useState(initialQuery);
@@ -482,9 +484,9 @@ function SearchInner() {
             <button
               type="button"
               onClick={() => router.push('/')}
-              className="px-4 py-1.5 rounded-full border border-white/25 bg-white/5 text-xs sm:text-sm text-gray-200 hover:bg-white/10"
+              className="px-4 py-1.5 rounded-full border border-white/25 bg.white/5 text-xs sm:text-sm text-gray-200 hover:bg-white/10"
             >
-              Clear search & return to feed
+              Clear search &amp; return to feed
             </button>
           </div>
         )}
@@ -514,10 +516,13 @@ function SearchInner() {
 
 /* ----------------------------- Page wrapper ----------------------------- */
 
+// Cast InstantSearch to `any` for JSX to satisfy Next/React typings
+const InstantSearchAny: any = InstantSearch;
+
 export default function SearchPage() {
   return (
-    <InstantSearch searchClient={searchClient} indexName={ALGOLIA_INDEX}>
+    <InstantSearchAny searchClient={searchClient} indexName={ALGOLIA_INDEX}>
       <SearchInner />
-    </InstantSearch>
+    </InstantSearchAny>
   );
 }

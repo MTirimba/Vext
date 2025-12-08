@@ -24,6 +24,8 @@ interface Withdrawal {
   updatedAt?: { seconds: number; nanoseconds: number };
 }
 
+type FirestoreWithdrawal = Omit<Withdrawal, "id">;
+
 export default function WithdrawalHistory() {
   const [user] = useAuthState(auth);
   const [withdrawals, setWithdrawals] = useState<Withdrawal[]>([]);
@@ -35,10 +37,13 @@ export default function WithdrawalHistory() {
     const q = query(ref, orderBy("createdAt", "desc"));
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const list: Withdrawal[] = snapshot.docs.map((doc) => ({
-        id: doc.id,
-        ...(doc.data() as Withdrawal),
-      }));
+      const list: Withdrawal[] = snapshot.docs.map((doc) => {
+        const data = doc.data() as FirestoreWithdrawal;
+        return {
+          id: doc.id,
+          ...data,
+        };
+      });
       setWithdrawals(list);
       setLoading(false);
     });

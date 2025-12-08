@@ -42,6 +42,7 @@ import {
   FaInstagram,
 } from 'react-icons/fa';
 import { SiTiktok } from 'react-icons/si';
+import { Tiro_Devanagari_Hindi } from 'next/font/google';
 
 interface OfferedService {
   id: string;
@@ -129,7 +130,7 @@ function getMarkupPercent(basePrice: number, config?: MarkupConfig | null) {
   const tier = cfg.tiers.find(
     (t) => basePrice >= t.min && (t.max == null || basePrice <= t.max),
   );
-  return tier ? t.percent : 0;
+  return tier ? tier.percent : 0;
 }
 
 function applyMarkup(basePrice: number, config?: MarkupConfig | null) {
@@ -548,8 +549,11 @@ export default function BusinessHandlePage() {
         }
       });
 
-      let conversationId = existingId;
-      if (!conversationId) {
+      // Explicitly type conversationId as string
+      let conversationId: string;
+      if (existingId) {
+        conversationId = existingId;
+      } else {
         const newConvRef = await addDoc(collection(db, 'conversations'), {
           participants: [user.uid, resolvedUid],
           createdAt: serverTimestamp(),
@@ -864,7 +868,6 @@ export default function BusinessHandlePage() {
                 userId: resolvedUid,
               } as any
             }
-            creator={profile as any}
             onClose={() => setBookingService(null)}
           />
         )}
@@ -999,7 +1002,7 @@ export default function BusinessHandlePage() {
 
       {/* Add / edit service modal */}
       {serviceModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center">
+        <div className="fixed inset-0 z-50 bg_BLACK/60 flex items-center justify-center">
           <div className="bg-white rounded-lg w-[90vw] max-w-md p-4 shadow-lg">
             <h3 className="text-base font-semibold mb-3">
               {editingService ? 'Edit service' : 'Add service'}

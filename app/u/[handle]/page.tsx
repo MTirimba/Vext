@@ -380,7 +380,6 @@ export default function PersonalHandlePage() {
                     {isFollowing ? 'Following' : 'Follow'}
                   </button>
                   <MessageButton
-                    currentUserId={user?.uid}
                     otherUserId={resolvedUid}
                     redirectToList
                   />

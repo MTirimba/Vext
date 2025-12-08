@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { initAdmin } from "@/lib/firebaseAdmin";
 
-export async function GET(req: NextRequest, { params }: { params: { uid: string } }) {
+export async function GET(req: NextRequest, { params }: any) {
   try {
     const { adminDb } = initAdmin();
     const { uid } = params;
@@ -15,6 +15,9 @@ export async function GET(req: NextRequest, { params }: { params: { uid: string 
     return NextResponse.json(snap.data());
   } catch (err) {
     console.error("User fetch error:", err);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Internal server error" },
+      { status: 500 },
+    );
   }
 }

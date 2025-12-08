@@ -77,3 +77,15 @@ export function computeClientPriceFromBase(
   const clientPrice = Math.round(price * factor);
   return { clientPrice, markupPercent: percent };
 }
+
+/**
+ * Simple helper used by search page:
+ * returns just the client-facing price (base + markup).
+ */
+export function priceWithMarkup(
+  basePrice: number,
+  tiers?: MarkupTier[],
+): number {
+  const { clientPrice } = computeClientPriceFromBase(basePrice, tiers);
+  return clientPrice;
+}

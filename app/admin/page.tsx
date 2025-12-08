@@ -6,6 +6,7 @@ import { useAdminGate } from '@/components/useAdminGate';
 import { db } from '@/lib/firebase';
 import {
   collection,
+  collectionGroup,
   getCountFromServer,
   query,
   where,
@@ -56,6 +57,16 @@ export default function AdminPage() {
     useState<MarkupTier[]>(DEFAULT_MARKUP_TIERS);
   const [markupLoading, setMarkupLoading] = useState(true);
   const [markupSaving, setMarkupSaving] = useState(false);
+
+  // --------- Finance tab extra state ---------
+  const [financeSubTab, setFinanceSubTab] = useState<
+    'flows' | 'clients' | 'payouts'
+  >('flows');
+  const [financeLoading, setFinanceLoading] = useState(false);
+
+  const [paidBookings, setPaidBookings] = useState<any[]>([]);
+  const [clientPaymentSummary, setClientPaymentSummary] = useState<any[]>([]);
+  const [payouts, setPayouts] = useState<any[]>([]);
 
   // ---------- Initial load: KPIs + recent bookings (with joined names)
   useEffect(() => {
@@ -255,9 +266,184 @@ export default function AdminPage() {
     })();
   }, [active, gate]);
 
-  if (gate === 'loading') return <p>Checking admin access…</p>;
-  if (gate === 'signedout') return <p>Please sign in to access admin.</p>;
-  if (gate === 'forbidden') return <p>Forbidden: admin access required.</p>;
+  // ---------- Finance: detailed cash-flow data ----------
+  useEffect(() => {
+    if (gate !== 'ok') return;
+    if (active !== 'finance') return;
+
+    (async () => {
+      try {
+        setFinanceLoading(true);
+
+        // 1) Incoming payments – bookings with paymentStatus === 'paid'
+        const paidQ = query(
+          collection(db, 'bookings'),
+          where('paymentStatus', '==', 'paid'),
+          limit(100),
+        );
+        const paidSnap = await getDocs(paidQ);
+        const rawPaid = paidSnap.docs.map((d) => ({
+          id: d.id,
+          ...d.data(),
+        })) as any[];
+
+        // Collect client IDs to join names
+        const clientIds = new Set<string>();
+        rawPaid.forEach((b) => {
+          if (b.clientId) clientIds.add(b.clientId);
+        });
+
+        const clientCache: Record<string, any> = {};
+        await Promise.all(
+          Array.from(clientIds).map(async (uid) => {
+            const us = await getDoc(doc(db, 'users', uid));
+            if (us.exists()) clientCache[uid] = us.data();
+          }),
+        );
+
+        const enrichedPaid = rawPaid
+          .map((b) => {
+            const clientInfo = clientCache[b.clientId] || {};
+            const clientName =
+              clientInfo.fullName ||
+              clientInfo.name ||
+              clientInfo.username ||
+              b.clientId ||
+              '—';
+
+            return {
+              id: b.id,
+              shortId: b.shortId,
+              clientId: b.clientId,
+              clientName,
+              total: Number(b.total) || 0,
+              paymentMethod: b.paymentMethod || 'unknown',
+              createdAt: b.createdAt,
+            };
+          })
+          .sort((a, b) => {
+            const aVal: any = a.createdAt;
+            const bVal: any = b.createdAt;
+
+            const aTime =
+              aVal?.toDate?.() instanceof Date
+                ? aVal.toDate().getTime()
+                : typeof aVal === 'number'
+                  ? aVal
+                  : 0;
+            const bTime =
+              bVal?.toDate?.() instanceof Date
+                ? bVal.toDate().getTime()
+                : typeof bVal === 'number'
+                  ? bVal
+                  : 0;
+            return bTime - aTime;
+          });
+
+        setPaidBookings(enrichedPaid);
+
+        // 2) Client payment summary – aggregate by client
+        const byClient = new Map<
+          string,
+          { clientId: string; clientName: string; total: number; count: number }
+        >();
+
+        for (const row of enrichedPaid) {
+          const key = row.clientId || 'unknown';
+          const existing =
+            byClient.get(key) || {
+              clientId: row.clientId || 'unknown',
+              clientName: row.clientName || '—',
+              total: 0,
+              count: 0,
+            };
+          existing.total += row.total || 0;
+          existing.count += 1;
+          byClient.set(key, existing);
+        }
+
+        const clientSummaryArr = Array.from(byClient.values()).sort(
+          (a, b) => b.total - a.total,
+        );
+        setClientPaymentSummary(clientSummaryArr);
+
+        // 3) Payouts – collection group on users/{uid}/withdrawals
+        const payoutsQ = query(
+          collectionGroup(db, 'withdrawals'),
+          limit(100),
+        );
+        const payoutsSnap = await getDocs(payoutsQ);
+        const rawPayouts = payoutsSnap.docs.map((d) => {
+          const data = d.data() as any;
+          const path = d.ref.path; // "users/{userId}/withdrawals/{withdrawalId}"
+          const segments = path.split('/');
+          const userId = segments.length >= 2 ? segments[1] : null;
+          return {
+            id: d.id,
+            userId,
+            ...data,
+          };
+        }) as any[];
+
+        // Collect provider IDs to join names
+        const providerIds = new Set<string>();
+        rawPayouts.forEach((p) => {
+          if (p.userId) providerIds.add(p.userId);
+        });
+
+        const providerCache: Record<string, any> = {};
+        await Promise.all(
+          Array.from(providerIds).map(async (uid) => {
+            const us = await getDoc(doc(db, 'users', uid));
+            if (us.exists()) providerCache[uid] = us.data();
+          }),
+        );
+
+        const enrichedPayouts = rawPayouts
+          .map((p) => {
+            const u = p.userId ? providerCache[p.userId] : null;
+            const providerName =
+              u?.businessName ||
+              u?.fullName ||
+              u?.name ||
+              u?.username ||
+              p.userId ||
+              '—';
+            const phone = p.phoneNumber || u?.businessPhone || u?.phone || '—';
+            return {
+              ...p,
+              providerName,
+              phone,
+            };
+          })
+          .sort((a, b) => {
+            const aVal: any = a.createdAt;
+            const bVal: any = b.createdAt;
+            const aTime =
+              aVal?.toDate?.() instanceof Date
+                ? aVal.toDate().getTime()
+                : typeof aVal === 'number'
+                  ? aVal
+                  : 0;
+            const bTime =
+              bVal?.toDate?.() instanceof Date
+                ? bVal.toDate().getTime()
+                : typeof bVal === 'number'
+                  ? bVal
+                  : 0;
+            return bTime - aTime;
+          });
+
+        setPayouts(enrichedPayouts);
+      } catch (err) {
+        console.error('[ADMIN FINANCE] load error:', err);
+      } finally {
+        setFinanceLoading(false);
+      }
+    })();
+  }, [active, gate]);
+
+  // ❗ Hooks must always be called – so derived hooks come before early returns
 
   // Finance derived numbers – approximate using blended markup from tiers
   const blendedMarkupPercent = useMemo(() => {
@@ -288,6 +474,11 @@ export default function AdminPage() {
       setMarkupSaving(false);
     }
   };
+
+  // ✅ gate-based early returns AFTER all hooks
+  if (gate === 'loading') return <p>Checking admin access…</p>;
+  if (gate === 'signedout') return <p>Please sign in to access admin.</p>;
+  if (gate === 'forbidden') return <p>Forbidden: admin access required.</p>;
 
   return (
     <div>
@@ -565,6 +756,210 @@ export default function AdminPage() {
             <code>platformFee</code> per booking, we’ll sum that
             directly instead of estimating.
           </p>
+
+          {/* Finance sub-tabs */}
+          <div className="mt-6">
+            <div className="mb-3 flex gap-2 border-b text-sm">
+              <button
+                type="button"
+                onClick={() => setFinanceSubTab('flows')}
+                className={`px-3 py-2 -mb-px border-b-2 ${
+                  financeSubTab === 'flows'
+                    ? 'border-black font-semibold'
+                    : 'border-transparent text-gray-500 hover:text-gray-800'
+                }`}
+              >
+                Incoming payments
+              </button>
+              <button
+                type="button"
+                onClick={() => setFinanceSubTab('clients')}
+                className={`px-3 py-2 -mb-px border-b-2 ${
+                  financeSubTab === 'clients'
+                    ? 'border-black font-semibold'
+                    : 'border-transparent text-gray-500 hover:text-gray-800'
+                }`}
+              >
+                Client summary
+              </button>
+              <button
+                type="button"
+                onClick={() => setFinanceSubTab('payouts')}
+                className={`px-3 py-2 -mb-px border-b-2 ${
+                  financeSubTab === 'payouts'
+                    ? 'border-black font-semibold'
+                    : 'border-transparent text-gray-500 hover:text-gray-800'
+                }`}
+              >
+                Provider payouts
+              </button>
+            </div>
+
+            {financeLoading && (
+              <p className="text-sm text-gray-600">
+                Loading finance details…
+              </p>
+            )}
+
+            {!financeLoading && financeSubTab === 'flows' && (
+              <div className="overflow-x-auto text-sm">
+                {paidBookings.length === 0 ? (
+                  <p className="text-gray-500">
+                    No paid bookings found yet.
+                  </p>
+                ) : (
+                  <table className="min-w-full border">
+                    <thead className="bg-gray-50">
+                      <tr className="text-left">
+                        <th className="px-3 py-2 border-r">Booking</th>
+                        <th className="px-3 py-2 border-r">Client</th>
+                        <th className="px-3 py-2 border-r">
+                          Paid at (createdAt)
+                        </th>
+                        <th className="px-3 py-2 border-r">Method</th>
+                        <th className="px-3 py-2">Amount (KSHS)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {paidBookings.map((b) => {
+                        const created: any = b.createdAt;
+                        const dt =
+                          created?.toDate?.() instanceof Date
+                            ? created.toDate()
+                            : typeof created === 'number'
+                              ? new Date(created)
+                              : null;
+                        return (
+                          <tr key={b.id} className="border-t">
+                            <td className="px-3 py-2 border-r whitespace-nowrap">
+                              #{b.shortId || b.id}
+                            </td>
+                            <td className="px-3 py-2 border-r">
+                              {b.clientName}
+                            </td>
+                            <td className="px-3 py-2 border-r whitespace-nowrap">
+                              {dt ? dt.toLocaleString() : '—'}
+                            </td>
+                            <td className="px-3 py-2 border-r capitalize">
+                              {b.paymentMethod || '—'}
+                            </td>
+                            <td className="px-3 py-2 text-right">
+                              {b.total.toLocaleString()}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            )}
+
+            {!financeLoading && financeSubTab === 'clients' && (
+              <div className="overflow-x-auto text-sm">
+                {clientPaymentSummary.length === 0 ? (
+                  <p className="text-gray-500">
+                    No client payments found yet.
+                  </p>
+                ) : (
+                  <table className="min-w-full border">
+                    <thead className="bg-gray-50">
+                      <tr className="text-left">
+                        <th className="px-3 py-2 border-r">Client</th>
+                        <th className="px-3 py-2 border-r">
+                          Total paid (KSHS)
+                        </th>
+                        <th className="px-3 py-2">Bookings</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {clientPaymentSummary.map((c) => (
+                        <tr key={c.clientId} className="border-t">
+                          <td className="px-3 py-2 border-r">
+                            {c.clientName}
+                          </td>
+                          <td className="px-3 py-2 border-r text-right">
+                            {c.total.toLocaleString()}
+                          </td>
+                          <td className="px-3 py-2">
+                            {c.count}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            )}
+
+            {!financeLoading && financeSubTab === 'payouts' && (
+              <div className="overflow-x-auto text-sm">
+                {payouts.length === 0 ? (
+                  <p className="text-gray-500">
+                    No provider payouts recorded yet.
+                  </p>
+                ) : (
+                  <table className="min-w-full border">
+                    <thead className="bg-gray-50">
+                      <tr className="text-left">
+                        <th className="px-3 py-2 border-r">
+                          Provider
+                        </th>
+                        <th className="px-3 py-2 border-r">
+                          User ID
+                        </th>
+                        <th className="px-3 py-2 border-r">
+                          Phone
+                        </th>
+                        <th className="px-3 py-2 border-r">
+                          Amount (KSHS)
+                        </th>
+                        <th className="px-3 py-2 border-r">
+                          Status
+                        </th>
+                        <th className="px-3 py-2">
+                          Created
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {payouts.map((p) => {
+                        const created: any = p.createdAt;
+                        const dt =
+                          created?.toDate?.() instanceof Date
+                            ? created.toDate()
+                            : typeof created === 'number'
+                              ? new Date(created)
+                              : null;
+                        return (
+                          <tr key={p.id} className="border-t">
+                            <td className="px-3 py-2 border-r">
+                              {p.providerName}
+                            </td>
+                            <td className="px-3 py-2 border-r whitespace-nowrap">
+                              {p.userId}
+                            </td>
+                            <td className="px-3 py-2 border-r">
+                              {p.phone}
+                            </td>
+                            <td className="px-3 py-2 border-r text-right">
+                              {(p.amount || 0).toLocaleString()}
+                            </td>
+                            <td className="px-3 py-2 border-r capitalize">
+                              {p.status || '—'}
+                            </td>
+                            <td className="px-3 py-2 whitespace-nowrap">
+                              {dt ? dt.toLocaleString() : '—'}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       )}
 

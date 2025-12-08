@@ -1,3 +1,5 @@
+// /workspaces/Vext/components/BookingModal.tsx
+// /workspaces/Vext/components/BookingModal.tsx
 "use client";
 
 import { useEffect, useRef, useState, useMemo } from "react";
@@ -60,6 +62,8 @@ type ConfirmedInfo = {
   serviceTitle?: string;
   completionPin?: string; // 🔐 PIN for service completion verification
 };
+
+type PaymentMethod = "paystack" | "mpesa" | "wallet" | "pesapal" | "";
 
 /* ---------- Markup config (tiered pricing) ---------- */
 
@@ -258,9 +262,7 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
   >({});
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
-  const [paymentMethod, setPaymentMethod] = useState<
-    "paystack" | "mpesa" | "pesapal" | ""
-  >("");
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("");
   const [mpesaPhone, setMpesaPhone] = useState("");
   const [bookedTimes, setBookedTimes] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -272,6 +274,7 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
   const bookingUnsubRef = useRef<Unsubscribe | null>(null);
 
   const [providerSchedule, setProviderSchedule] = useState<ScheduleMap>({});
+  const [awayDates, setAwayDates] = useState<string[]>([]); // 🔴 provider away days (full-day blocks)
 
   // 🔐 holds the completion PIN from backend for this booking
   const [completionPin, setCompletionPin] = useState<string | null>(null);
@@ -281,6 +284,10 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
 
   // ⭐ client's special instructions for this booking
   const [clientInstructions, setClientInstructions] = useState("");
+
+  // 💰 Wallet balance (client-side view)
+  const [walletBalance, setWalletBalance] = useState<number | null>(null);
+  const [walletError, setWalletError] = useState<string | null>(null);
 
   // Pricing
   const base = video.serviceCost || 0;
@@ -312,6 +319,8 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
   const specialInstructions = video.specialInstructions || "";
   const includes = video.serviceIncludes || [];
   const notProvided = video.notProvided || [];
+
+  const dateToISO = (d: Date) => d.toISOString().split("T")[0];
 
   // Load markup config from Firestore (config/pricing)
   useEffect(() => {
@@ -376,6 +385,7 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
     });
   }, [user]);
 
+  // Provider schedule from profile
   useEffect(() => {
     (async () => {
       if (!video?.userId) return;
@@ -389,6 +399,27 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
     })();
   }, [video?.userId]);
 
+  // Provider away days (full-day blocks) from dashboard
+  useEffect(() => {
+    (async () => {
+      if (!video?.userId) return;
+      try {
+        const snap = await getDocs(
+          collection(db, "users", video.userId, "awayDays"),
+        );
+        const list: string[] = [];
+        snap.forEach((d) => {
+          const data = d.data() as any;
+          list.push(data.date || d.id);
+        });
+        setAwayDates(list);
+      } catch (err) {
+        console.error("load provider awayDays error", err);
+      }
+    })();
+  }, [video?.userId]);
+
+  // 🔁 Live-booked times for selected date
   useEffect(() => {
     if (!video?.userId || !selectedDate) return;
     const dateStr = selectedDate.toISOString().split("T")[0];
@@ -403,6 +434,46 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
     });
     return () => unsub();
   }, [video?.userId, selectedDate]);
+
+  // 🔁 Client wallet balance (from walletTransactions)
+  useEffect(() => {
+    if (!user) {
+      setWalletBalance(null);
+      return;
+    }
+    try {
+      const txRef = collection(
+        db,
+        "users",
+        user.uid,
+        "walletTransactions",
+      );
+      const unsub = onSnapshot(
+        txRef,
+        (snap) => {
+          let balance = 0;
+          snap.forEach((d) => {
+            const data = d.data() as any;
+            const status = (data.status || "").toLowerCase();
+            if (status !== "completed") return;
+            const amount = Number(data.amount) || 0;
+            const type = (data.type || "credit") as "credit" | "debit";
+            balance += type === "credit" ? amount : -amount;
+          });
+          setWalletBalance(balance);
+          setWalletError(null);
+        },
+        (err) => {
+          console.error("wallet balance snapshot error", err);
+          setWalletError("Could not load wallet balance.");
+        },
+      );
+      return () => unsub();
+    } catch (err) {
+      console.error("wallet balance listener error", err);
+      setWalletError("Could not load wallet balance.");
+    }
+  }, [user]);
 
   useEffect(() => {
     return () => {
@@ -496,6 +567,22 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
     if (!profileComplete) return alert("Please complete your profile");
     if (!paymentMethod) return alert("Select a payment method");
 
+    // 💰 Wallet sanity check before we even save booking
+    if (paymentMethod === "wallet") {
+      if (walletBalance == null) {
+        alert(
+          "We couldn't load your wallet balance. Please try again or use another payment method.",
+        );
+        return;
+      }
+      if (walletBalance < totalWithMarkup) {
+        alert(
+          "Your wallet balance is not enough to pay for this booking. Please deposit more or choose another payment method.",
+        );
+        return;
+      }
+    }
+
     try {
       setLoading(true);
       const dateISO = selectedDate.toISOString().split("T")[0];
@@ -535,6 +622,53 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
         setCompletionPin(saveData.completionPin);
       }
 
+      // 💰 WALLET FLOW — delegate to backend to debit wallet & confirm booking
+      if (paymentMethod === "wallet") {
+        try {
+          const confirmRes = await fetch("/api/confirm-booking", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              bookingId,
+              method: "wallet",
+              walletPay: true,
+            }),
+          });
+          const confirmData = await confirmRes.json().catch(() => null);
+          if (!confirmRes.ok) {
+            console.error("wallet confirm error", confirmData);
+            throw new Error(
+              (confirmData && confirmData.error) ||
+                "Wallet payment failed. Please try another method.",
+            );
+          }
+
+          await refreshBookedTimes();
+          setConfirmed({
+            bookingId,
+            shortId,
+            ref: confirmData?.walletTxId || undefined,
+            dateISO,
+            time: selectedTime,
+            total: totalWithMarkup,
+            completionPin:
+              saveData.completionPin || completionPin || undefined,
+          });
+          setStep(3);
+          return;
+        } catch (err: any) {
+          console.error("wallet payment error", err);
+          alert(
+            err?.message ||
+              "Wallet payment failed. Your wallet was not charged. Please try again or use another method.",
+          );
+          return;
+        } finally {
+          setLoading(false);
+        }
+      }
+
+      // 💳 PAYSTACK FLOW
       if (paymentMethod === "paystack") {
         const ensurePaystackReady = () =>
           new Promise<void>((resolve, reject) => {
@@ -615,6 +749,7 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
         handler.openIframe();
       }
 
+      // 📲 MPESA FLOW
       if (paymentMethod === "mpesa") {
         if (!mpesaPhone.trim())
           return alert("Please enter the M-Pesa number to charge");
@@ -647,19 +782,31 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
       await serverLog({ step: "payError", message: err.message });
       alert(err.message);
     } finally {
-      setLoading(false);
+      if (paymentMethod !== "wallet") {
+        // wallet branch already called setLoading(false) in its own finally
+        setLoading(false);
+      }
     }
   };
 
-  // Derived slots
-  const candidateSlots = useMemo(
-    () => generateSlotsForDate(selectedDate, providerSchedule, 60),
-    [selectedDate, providerSchedule],
-  );
+  // Derived slots (respect away days)
+  const candidateSlots = useMemo(() => {
+    const iso = dateToISO(selectedDate);
+    if (awayDates.includes(iso)) {
+      // Provider has blocked this day off completely
+      return [];
+    }
+    return generateSlotsForDate(selectedDate, providerSchedule, 60);
+  }, [selectedDate, providerSchedule, awayDates]);
 
   const tileDisabled = ({ date, view }: { date: Date; view: string }) => {
     if (view !== "month") return false;
     if (isPastDay(date)) return true;
+
+    // Provider full-day away blocks from their dashboard
+    const iso = dateToISO(date);
+    if (awayDates.includes(iso)) return true;
+
     const slots = generateSlotsForDate(date, providerSchedule, 60);
     if (slots.length === 0) return true;
 
@@ -677,6 +824,11 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
     }
     return false;
   };
+
+  const walletInsufficient =
+    paymentMethod === "wallet" &&
+    walletBalance != null &&
+    walletBalance < totalWithMarkup;
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
@@ -866,7 +1018,11 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
                     >
                       <option value="">-- time --</option>
                       {candidateSlots.length === 0 && (
-                        <option disabled>Closed</option>
+                        <option disabled>
+                          {awayDates.includes(dateToISO(selectedDate))
+                            ? "Provider is away"
+                            : "Closed"}
+                        </option>
                       )}
                       {candidateSlots.map((t) => {
                         const isBooked = bookedTimes.includes(t);
@@ -953,14 +1109,41 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
                       className="w-full border rounded px-2 py-1 mt-2"
                       value={paymentMethod}
                       onChange={(e) =>
-                        setPaymentMethod(e.target.value as any)
+                        setPaymentMethod(e.target.value as PaymentMethod)
                       }
                       disabled={mpesaPending}
                     >
                       <option value="">-- choose --</option>
-                      <option value="paystack">Pay with Card (Paystack)</option>
+                      <option value="paystack">
+                        Pay with Card (Paystack)
+                      </option>
                       <option value="mpesa">Pay with M-Pesa</option>
+                      <option
+                        value="wallet"
+                        disabled={
+                          walletBalance == null ||
+                          walletBalance <= 0 ||
+                          walletBalance < totalWithMarkup
+                        }
+                      >
+                        {walletBalance == null
+                          ? "Wallet (loading…)"
+                          : `Pay with Wallet (KSH ${walletBalance.toFixed(
+                              2,
+                            )} available)`}
+                      </option>
                     </select>
+
+                    {walletError && (
+                      <p className="mt-1 text-xs text-red-600">
+                        {walletError}
+                      </p>
+                    )}
+                    {walletBalance != null && walletBalance < totalWithMarkup && (
+                      <p className="mt-1 text-xs text-red-600">
+                        Wallet balance is not enough for this booking.
+                      </p>
+                    )}
 
                     {paymentMethod === "mpesa" && (
                       <div className="mt-3">
@@ -984,7 +1167,9 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
 
                     <button
                       onClick={handlePay}
-                      disabled={loading || mpesaPending}
+                      disabled={
+                        loading || mpesaPending || (paymentMethod === "wallet" && walletInsufficient)
+                      }
                       className="mt-4 w-full bg-[#0F7A5F] hover:bg-[#0b644e] text-white py-2 rounded disabled:bg-gray-400"
                     >
                       {loading ? "Processing..." : "Proceed to Pay"}

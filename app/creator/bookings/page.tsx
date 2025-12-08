@@ -487,7 +487,6 @@ export default function CreatorBookings() {
                   {user && b.clientId && (
                     <div className="ml-2">
                       <MessageButton
-                        currentUserId={user.uid}
                         otherUserId={b.clientId}
                         redirectToList
                       />
