@@ -180,7 +180,8 @@ export default function ProviderDashboard() {
     return Math.round(total * 100) / 100;
   };
 
-  // ✅ Track earnings and withdrawals in real time (available balance – withdrawals with status completed/success)
+  // ✅ Track earnings and withdrawals in real time
+  // Available balance = verified earnings – (all initiated/pending/processing/success withdrawals)
   useEffect(() => {
     if (!user) return;
     setLoading(true);
@@ -213,17 +214,29 @@ export default function ProviderDashboard() {
     });
 
     const unsubWithdrawals = onSnapshot(qWithdrawals, (snap) => {
-      const raw = snap.docs.map((d) => d.data());
+      const raw = snap.docs.map((d) => ({
+        id: d.id,
+        ...d.data(),
+      }));
 
-      // ✅ Only withdrawals that the callback has completed should reduce the balance.
-      //    We still accept legacy "success" values from the no-callback patch.
-      totalWithdrawn = snap.docs
-        .filter((d) =>
-          ['completed', 'success'].includes(
-            (d.data().status || '').toLowerCase(),
-          ),
-        )
-        .reduce((sum, d) => sum + (d.data().amount || 0), 0);
+      // ✅ Treat initiated/pending/processing as already deducted from available balance.
+      // Once a withdrawal is initiated, the amount is no longer "available" even if
+      // the M-Pesa callback hasn't flipped it to success yet.
+      totalWithdrawn = snap.docs.reduce((sum, d) => {
+        const data = d.data() as any;
+        const status = (data.status || '').toLowerCase();
+        const amount = Number(data.amount) || 0;
+
+        const countAsWithdrawn = [
+          'completed',
+          'success',
+          'initiated',
+          'pending',
+          'processing',
+        ].includes(status);
+
+        return countAsWithdrawn ? sum + amount : sum;
+      }, 0);
 
       console.log('[PROVIDER_DASHBOARD] Withdrawals snapshot:', {
         totalDocs: snap.size,
@@ -607,9 +620,9 @@ export default function ProviderDashboard() {
               KSH {balance.toFixed(2)}
             </p>
             <p className="mt-2 text-xs text-gray-500">
-              Only bookings whose Service Release PIN has been verified are
-              included in this balance. Withdrawals reduce this balance only
-              after the M-Pesa callback confirms them as completed.
+              This is your share from completed bookings whose Service Release
+              PIN has been verified, minus all withdrawals you have already
+              initiated (including those still waiting for M-Pesa confirmation).
             </p>
           </div>
 

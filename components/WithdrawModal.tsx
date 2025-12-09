@@ -14,6 +14,7 @@ import {
   doc,
   getDoc,
   updateDoc,
+  setDoc,
 } from 'firebase/firestore';
 
 interface WithdrawModalProps {
@@ -156,7 +157,10 @@ export default function WithdrawModal({ available, onClose }: WithdrawModalProps
       try {
         data = await resp.json();
       } catch (jsonErr) {
-        console.error('[WITHDRAW_MODAL] Failed to parse JSON from /api/mpesa/b2c:', jsonErr);
+        console.error(
+          '[WITHDRAW_MODAL] Failed to parse JSON from /api/mpesa/b2c:',
+          jsonErr,
+        );
       }
 
       console.log('[WITHDRAW_MODAL] /api/mpesa/b2c response:', {
@@ -175,34 +179,80 @@ export default function WithdrawModal({ available, onClose }: WithdrawModalProps
         return;
       }
 
-      // 2) Record a withdrawal entry for history.
-      //    We now go back to letting the Safaricom callback update the status.
+      // 2) Record a withdrawal entry for history and create mapping doc
       try {
         const mpesaResp = data && (data.mpesaResponse ?? data);
+
+        const originatorConversationId =
+          mpesaResp?.OriginatorConversationID ?? null;
+        const conversationId = mpesaResp?.ConversationID ?? null;
 
         console.log('[WITHDRAW_MODAL] Recording withdrawal document with:', {
           amount: amountNumber,
           phoneNumber,
-          originatorConversationId: mpesaResp?.OriginatorConversationID ?? null,
-          conversationId: mpesaResp?.ConversationID ?? null,
+          originatorConversationId,
+          conversationId,
         });
 
-        await addDoc(collection(db, 'users', user.uid, 'withdrawals'), {
+        // Create withdrawal doc under user
+        const withdrawalsRef = collection(db, 'users', user.uid, 'withdrawals');
+        const withdrawalDocRef = await addDoc(withdrawalsRef, {
           amount: amountNumber,
           phoneNumber,
 
-          // ✅ Status is "initiated" – the callback will flip this to "completed"/"failed"
+          // ✅ Status is "initiated" – the callback will flip this to "success"/"failed"
           status: 'initiated',
 
           createdAt: serverTimestamp(),
           channel: 'mpesa-b2c',
 
           // 🔗 IDs to match in /api/mpesa/b2c/callback
-          originatorConversationId: mpesaResp?.OriginatorConversationID ?? null,
-          conversationId: mpesaResp?.ConversationID ?? null,
+          originatorConversationId,
+          conversationId,
 
           rawMpesaResponse: mpesaResp,
         });
+
+        console.log('[WITHDRAW_MODAL] Withdrawal doc created:', {
+          path: withdrawalDocRef.path,
+          id: withdrawalDocRef.id,
+        });
+
+        // 🔗 Create mapping doc for callback → actual withdrawal document
+        try {
+          if (originatorConversationId) {
+            await setDoc(
+              doc(db, 'mpesaWithdrawals', originatorConversationId),
+              {
+                userId: user.uid,
+                withdrawalId: withdrawalDocRef.id,
+                amount: amountNumber,
+                phoneNumber,
+                conversationId,
+                createdAt: serverTimestamp(),
+              },
+              { merge: true },
+            );
+
+            console.log(
+              '[WITHDRAW_MODAL] Mapping doc created in mpesaWithdrawals:',
+              {
+                originatorConversationId,
+                userId: user.uid,
+                withdrawalId: withdrawalDocRef.id,
+              },
+            );
+          } else {
+            console.warn(
+              '[WITHDRAW_MODAL] No OriginatorConversationID – mapping doc not created',
+            );
+          }
+        } catch (mapErr) {
+          console.error(
+            '[WITHDRAW_MODAL] Failed to create mpesaWithdrawals mapping doc:',
+            mapErr,
+          );
+        }
       } catch (e) {
         console.error('Failed to record withdrawal document:', e);
       }
@@ -324,9 +374,9 @@ export default function WithdrawModal({ available, onClose }: WithdrawModalProps
                 }
               />
               <p className="mt-1 text-[11px] text-gray-500">
-                This PIN protects your withdrawals. Keep it private and do not share it
-                with anyone. If you forget it, you can set a new one in your payout
-                settings.
+                This PIN protects your withdrawals. Keep it private and do not
+                share it with anyone. If you forget it, you can set a new one in
+                your payout settings.
               </p>
             </div>
             {pinError && (

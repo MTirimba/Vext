@@ -4,70 +4,27 @@ import { adminDb } from "@/lib/firebaseAdmin";
 
 export const runtime = "nodejs";
 
-// Helper: try a list of field names one by one
-async function findWithdrawalByFields(
-  value: string,
-  fields: string[]
-): Promise<FirebaseFirestore.DocumentReference | null> {
-  if (!value) return null;
-
-  for (const field of fields) {
-    try {
-      console.log(
-        "[M-PESA B2C CALLBACK] Querying withdrawals by",
-        field,
-        "==",
-        value
-      );
-      const snap = await adminDb
-        .collectionGroup("withdrawals")
-        .where(field, "==", value)
-        .limit(1)
-        .get();
-
-      console.log(
-        `[M-PESA B2C CALLBACK] Query by ${field} returned docs:`,
-        snap.size
-      );
-
-      if (!snap.empty) {
-        console.log(
-          `[M-PESA B2C CALLBACK] Matched withdrawal doc (${field}):`,
-          snap.docs[0].id
-        );
-        return snap.docs[0].ref;
-      }
-    } catch (err: any) {
-      console.error(
-        `[M-PESA B2C CALLBACK] Error querying by ${field}:`,
-        err?.message || err
-      );
-    }
-  }
-
-  return null;
-}
-
 export async function POST(req: NextRequest) {
   console.log("📥 [M-PESA B2C CALLBACK] HIT /api/mpesa/b2c/callback");
 
   let body: any = {};
   try {
     body = await req.json();
-  } catch {
-    console.error("❌ [M-PESA B2C CALLBACK] Failed to parse JSON body");
+  } catch (e) {
+    console.error("❌ [M-PESA B2C CALLBACK] Failed to parse JSON body", e);
   }
 
   console.log(
     "📥 [M-PESA B2C CALLBACK] Raw body:",
-    JSON.stringify(body, null, 2)
+    JSON.stringify(body, null, 2),
   );
 
   try {
     const result = body?.Result;
     if (!result) {
-      console.warn("⚠️ [M-PESA B2C CALLBACK] No Result object in payload");
-      // Still ACK so Safaricom stops retrying
+      console.warn(
+        "⚠️ [M-PESA B2C CALLBACK] No Result object in payload, ACK anyway",
+      );
       return NextResponse.json({ ResultCode: 0, ResultDesc: "Accepted" });
     }
 
@@ -84,7 +41,7 @@ export async function POST(req: NextRequest) {
       resultDesc,
     });
 
-    // Extract common parameters
+    // Extract commonly useful fields from ResultParameters
     let amount: number | null = null;
     let receipt: string | null = null;
     let receiver: string | null = null;
@@ -117,122 +74,77 @@ export async function POST(req: NextRequest) {
       completedAt,
     });
 
-    // 🔎 Try to find the matching withdrawal doc
-    let withdrawalRef: FirebaseFirestore.DocumentReference | null = null;
-
-    // 1️⃣ Try originatorConversationId with multiple possible field names
-    if (originatorConversationId) {
-      withdrawalRef = await findWithdrawalByFields(originatorConversationId, [
-        "originatorConversationId",
-        "OriginatorConversationID",
-        "mpesaOriginatorConversationId",
-      ]);
-    }
-
-    // 2️⃣ Try conversationId with multiple possible field names
-    if (!withdrawalRef && conversationId) {
-      withdrawalRef = await findWithdrawalByFields(conversationId, [
-        "conversationId",
-        "ConversationID",
-        "mpesaConversationId",
-      ]);
-    }
-
-    // 3️⃣ Fallback: by amount (find any withdrawal with that amount)
-    if (!withdrawalRef && amount !== null && !Number.isNaN(amount)) {
-      try {
-        console.log(
-          "[M-PESA B2C CALLBACK] Fallback query by amount:",
-          amount
-        );
-
-        const fallbackSnap = await adminDb
-          .collectionGroup("withdrawals")
-          .where("amount", "==", amount)
-          .limit(1)
-          .get();
-
-        console.log(
-          "[M-PESA B2C CALLBACK] Fallback amount query docs:",
-          fallbackSnap.size
-        );
-
-        if (!fallbackSnap.empty) {
-          withdrawalRef = fallbackSnap.docs[0].ref;
-          console.log(
-            "[M-PESA B2C CALLBACK] Matched withdrawal doc (fallback amount):",
-            fallbackSnap.docs[0].id
-          );
-        }
-      } catch (err: any) {
-        console.error(
-          "[M-PESA B2C CALLBACK] Error in amount fallback query:",
-          err?.message || err
-        );
-      }
-    }
-
-    if (!withdrawalRef) {
+    if (!originatorConversationId) {
       console.warn(
-        "[M-PESA B2C CALLBACK] No matching withdrawal document found for IDs / amount:",
-        { originatorConversationId, conversationId, amount }
+        "[M-PESA B2C CALLBACK] Missing OriginatorConversationID; cannot map to withdrawal",
       );
-      // Still ACK the callback so Safaricom stops retrying
       return NextResponse.json({ ResultCode: 0, ResultDesc: "Accepted" });
     }
 
-    // ✅ Update withdrawal status based on ResultCode
-    if (resultCode === 0) {
-      console.log(
-        "✅ [M-PESA B2C CALLBACK] Payment success, marking withdrawal as success"
+    // 🔎 Step 1: look up mapping in top-level mpesaWithdrawals collection
+    const mappingSnap = await adminDb
+      .collection("mpesaWithdrawals")
+      .doc(originatorConversationId)
+      .get();
+
+    if (!mappingSnap.exists) {
+      console.warn(
+        "[M-PESA B2C CALLBACK] No mpesaWithdrawals mapping doc found for OriginatorConversationID:",
+        originatorConversationId,
       );
-      await withdrawalRef.set(
-        {
-          status: "success",
-          mpesaResultCode: resultCode,
-          mpesaResultDesc: resultDesc,
-          mpesaConversationId: conversationId || null,
-          mpesaOriginatorConversationId: originatorConversationId || null,
-          mpesaReceipt: receipt,
-          mpesaAmount: amount,
-          mpesaReceiver: receiver,
-          mpesaCompletedAt: completedAt,
-          mpesaRawCallback: body,
-          updatedAt: Date.now(),
-        },
-        { merge: true }
-      );
-      console.log(
-        "✅ [M-PESA B2C CALLBACK] Withdrawal doc updated to success."
-      );
-    } else {
-      console.log(
-        "❌ [M-PESA B2C CALLBACK] Payment failed",
-        resultCode,
-        resultDesc
-      );
-      await withdrawalRef.set(
-        {
-          status: "failed",
-          mpesaResultCode: resultCode,
-          mpesaResultDesc: resultDesc,
-          mpesaConversationId: conversationId || null,
-          mpesaOriginatorConversationId: originatorConversationId || null,
-          mpesaRawCallback: body,
-          updatedAt: Date.now(),
-        },
-        { merge: true }
-      );
-      console.log(
-        "❌ [M-PESA B2C CALLBACK] Withdrawal doc updated to failed."
-      );
+      return NextResponse.json({ ResultCode: 0, ResultDesc: "Accepted" });
     }
 
-    // ACK to Safaricom
+    const mapping = mappingSnap.data() as {
+      userId?: string;
+      withdrawalId?: string;
+      conversationId?: string;
+    };
+
+    if (!mapping.userId || !mapping.withdrawalId) {
+      console.warn(
+        "[M-PESA B2C CALLBACK] Mapping doc missing userId/withdrawalId:",
+        mapping,
+      );
+      return NextResponse.json({ ResultCode: 0, ResultDesc: "Accepted" });
+    }
+
+    const withdrawalRef = adminDb.doc(
+      `users/${mapping.userId}/withdrawals/${mapping.withdrawalId}`,
+    );
+
+    const status = resultCode === 0 ? "success" : "failed";
+
+    await withdrawalRef.set(
+      {
+        status,
+        mpesaResultCode: resultCode,
+        mpesaResultDesc: resultDesc,
+        mpesaConversationId: conversationId || mapping.conversationId || null,
+        mpesaOriginatorConversationId: originatorConversationId,
+        mpesaAmount: amount,
+        mpesaReceipt: receipt,
+        mpesaReceiver: receiver,
+        mpesaCompletedAt: completedAt,
+        mpesaRawCallback: body,
+        updatedAt: Date.now(),
+      },
+      { merge: true },
+    );
+
+    console.log(
+      "✅ [M-PESA B2C CALLBACK] Withdrawal doc updated:",
+      {
+        path: withdrawalRef.path,
+        status,
+      },
+    );
+
+    // ACK to Safaricom so it stops retrying
     return NextResponse.json({ ResultCode: 0, ResultDesc: "Accepted" });
   } catch (err: any) {
     console.error("❌ [M-PESA B2C CALLBACK ERROR]:", err?.message || err);
-    // Still acknowledge to stop retries
+    // Still ACK, but log the error
     return NextResponse.json({ ResultCode: 0, ResultDesc: "Error logged" });
   }
 }
