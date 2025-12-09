@@ -136,19 +136,36 @@ export default function WithdrawModal({ available, onClose }: WithdrawModalProps
     try {
       setSubmitting(true);
 
-      console.log('[WITHDRAW_MODAL] Submitting withdrawal request', {
+      console.log('[WITHDRAW_MODAL] Creating withdrawal document', {
         userId: user.uid,
         amountNumber,
         phoneNumber,
       });
 
-      // 1) Call our B2C API
+      // 1) Create withdrawal doc under the user (client is allowed by rules)
+      const withdrawalsRef = collection(db, 'users', user.uid, 'withdrawals');
+      const withdrawalDocRef = await addDoc(withdrawalsRef, {
+        amount: amountNumber,
+        phoneNumber,
+        status: 'initiated',
+        createdAt: serverTimestamp(),
+        channel: 'mpesa-b2c',
+      });
+
+      console.log('[WITHDRAW_MODAL] Withdrawal doc created:', {
+        path: withdrawalDocRef.path,
+        id: withdrawalDocRef.id,
+      });
+
+      // 2) Call our B2C API, passing userId + withdrawalId
       const resp = await fetch('/api/mpesa/b2c', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           amount: amountNumber,
           phoneNumber, // E.164; route will normalize to 2547xxxx
+          userId: user.uid,
+          withdrawalId: withdrawalDocRef.id,
         }),
       });
 
@@ -169,7 +186,21 @@ export default function WithdrawModal({ available, onClose }: WithdrawModalProps
       });
 
       if (!resp.ok) {
-        console.error('B2C error full response:', data);
+        console.error('[WITHDRAW_MODAL] B2C error full response:', data);
+
+        // mark this withdrawal as failed on init error
+        try {
+          await updateDoc(withdrawalDocRef, {
+            status: 'failed',
+            mpesaInitError: data || null,
+          });
+        } catch (updateErr) {
+          console.error(
+            '[WITHDRAW_MODAL] Failed to mark withdrawal as failed:',
+            updateErr,
+          );
+        }
+
         setError(
           (data && data.error) ||
             'Withdrawal failed. Please check your details and try again.',
@@ -178,49 +209,7 @@ export default function WithdrawModal({ available, onClose }: WithdrawModalProps
         return;
       }
 
-      // 2) Record a withdrawal entry for history
-      try {
-        const mpesaResp = data && (data.mpesaResponse ?? data);
-
-        const originatorConversationId =
-          mpesaResp?.OriginatorConversationID ?? null;
-        const conversationId = mpesaResp?.ConversationID ?? null;
-
-        console.log('[WITHDRAW_MODAL] Recording withdrawal document with:', {
-          amount: amountNumber,
-          phoneNumber,
-          originatorConversationId,
-          conversationId,
-        });
-
-        // Create withdrawal doc under user
-        const withdrawalsRef = collection(db, 'users', user.uid, 'withdrawals');
-        const withdrawalDocRef = await addDoc(withdrawalsRef, {
-          amount: amountNumber,
-          phoneNumber,
-
-          // ✅ Status is "initiated" – the callback will flip this to "success"/"failed"
-          status: 'initiated',
-
-          createdAt: serverTimestamp(),
-          channel: 'mpesa-b2c',
-
-          originatorConversationId,
-          conversationId,
-
-          rawMpesaResponse: mpesaResp,
-        });
-
-        console.log('[WITHDRAW_MODAL] Withdrawal doc created:', {
-          path: withdrawalDocRef.path,
-          id: withdrawalDocRef.id,
-        });
-
-        // ❌ NO mapping doc here anymore – handled purely server-side in callback
-      } catch (e) {
-        console.error('Failed to record withdrawal document:', e);
-      }
-
+      // all good on init, actual success/failure will come via B2C callback
       setSuccess(
         'Withdrawal request sent. You will receive an M-Pesa SMS once it is processed.',
       );

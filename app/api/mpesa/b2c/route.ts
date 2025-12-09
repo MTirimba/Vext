@@ -1,5 +1,6 @@
 // /workspaces/Vext/app/api/mpesa/b2c/route.ts
 import { NextRequest, NextResponse } from "next/server";
+import { adminDb } from "@/lib/firebaseAdmin";
 
 export const runtime = "nodejs";
 
@@ -91,6 +92,9 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     console.log("[M-Pesa B2C] Incoming /api/mpesa/b2c request body:", body);
 
+    const userId = String(body.userId || "").trim();
+    const withdrawalId = String(body.withdrawalId || "").trim();
+
     const amount = Number(body.amount);
     const phoneNumber = String(body.phoneNumber || "").trim();
     const remarks =
@@ -108,6 +112,17 @@ export async function POST(req: NextRequest) {
       console.warn("[M-Pesa B2C] Missing phoneNumber in request body");
       return NextResponse.json(
         { error: "phoneNumber is required." },
+        { status: 400 }
+      );
+    }
+
+    if (!userId || !withdrawalId) {
+      console.warn("[M-Pesa B2C] Missing userId or withdrawalId from client", {
+        userId,
+        withdrawalId,
+      });
+      return NextResponse.json(
+        { error: "userId and withdrawalId are required." },
         { status: 400 }
       );
     }
@@ -149,14 +164,15 @@ export async function POST(req: NextRequest) {
       env: MPESA_ENV,
       baseUrl: MPESA_BASE_URL,
       endpointPath: B2C_ENDPOINT_PATH,
+      userId,
+      withdrawalId,
     });
 
     const token = await getAccessToken();
 
-    const OriginatorConversationID = `VEXT_${Date.now()}`;
-
     const payload = {
-      OriginatorConversationID,
+      // OriginatorConversationID is returned by Safaricom in the response;
+      // we don't rely on setting it here.
       InitiatorName: B2C_INITIATOR_NAME,
       SecurityCredential: B2C_SECURITY_CREDENTIAL,
       CommandID: "BusinessPayment", // or 'SalaryPayment' / 'PromotionPayment'
@@ -221,6 +237,68 @@ export async function POST(req: NextRequest) {
       "[M-Pesa B2C] Success response:",
       JSON.stringify(data, null, 2)
     );
+
+    // Safaricom returns its own OriginatorConversationID / ConversationID
+    const originatorConversationId =
+      (data as any)?.OriginatorConversationID || null;
+    const conversationId = (data as any)?.ConversationID || null;
+
+    // 🔗 Store mapping doc for callback to locate withdrawal
+    try {
+      if (originatorConversationId) {
+        await adminDb
+          .collection("mpesaWithdrawals")
+          .doc(originatorConversationId)
+          .set(
+            {
+              userId,
+              withdrawalId,
+              amount,
+              phoneNumber: normalizedPhone,
+              conversationId,
+              createdAt: Date.now(),
+              mpesaInitResponse: data,
+            },
+            { merge: true }
+          );
+
+        console.log(
+          "[M-Pesa B2C] Mapping doc created in mpesaWithdrawals:",
+          {
+            originatorConversationId,
+            userId,
+            withdrawalId,
+          }
+        );
+      } else {
+        console.warn(
+          "[M-Pesa B2C] No OriginatorConversationID in response; mapping doc not created"
+        );
+      }
+
+      // also patch the withdrawal document with IDs (for debugging / history)
+      const withdrawalRef = adminDb.doc(
+        `users/${userId}/withdrawals/${withdrawalId}`
+      );
+      await withdrawalRef.set(
+        {
+          originatorConversationId,
+          conversationId,
+          mpesaInitResponse: data,
+          updatedAt: Date.now(),
+        },
+        { merge: true }
+      );
+      console.log(
+        "[M-Pesa B2C] Withdrawal doc updated with M-Pesa IDs:",
+        withdrawalRef.path
+      );
+    } catch (mapErr) {
+      console.error(
+        "[M-Pesa B2C] Failed to create mapping doc or update withdrawal:",
+        mapErr
+      );
+    }
 
     return NextResponse.json(
       {
