@@ -208,7 +208,7 @@ export default function ProviderDashboard() {
     return Math.round(total * 100) / 100;
   };
 
-  // ✅ Track earnings and withdrawals in real time (available balance – releaseVerified = true)
+  // ✅ Track earnings and withdrawals in real time (available balance – withdrawals with status completed/success)
   useEffect(() => {
     if (!user) return;
     setLoading(true);
@@ -242,6 +242,9 @@ export default function ProviderDashboard() {
 
     const unsubWithdrawals = onSnapshot(qWithdrawals, (snap) => {
       const raw = snap.docs.map((d) => d.data());
+
+      // ✅ Only withdrawals that the callback has completed should reduce the balance.
+      //    We still accept legacy "success" values from the no-callback patch.
       totalWithdrawn = snap.docs
         .filter((d) =>
           ['completed', 'success'].includes(
@@ -641,7 +644,8 @@ export default function ProviderDashboard() {
             </AnimatePresence>
             <p className="mt-2 text-xs text-gray-500">
               Only bookings whose Service Release PIN has been verified are
-              included in this balance.
+              included in this balance. Withdrawals reduce this balance only
+              after the M-Pesa callback confirms them as completed.
             </p>
           </div>
 

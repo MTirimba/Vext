@@ -166,17 +166,17 @@ export default function WithdrawModal({ available, onClose }: WithdrawModalProps
       });
 
       if (!resp.ok) {
-        // 🔍 log the full object so we can see real M-Pesa error text
         console.error('B2C error full response:', data);
         setError(
           (data && data.error) ||
-            'Withdrawal failed. Please check your details and try again.'
+            'Withdrawal failed. Please check your details and try again.',
         );
         setSubmitting(false);
         return;
       }
 
-      // 2) Record a withdrawal entry for history (now with conversation IDs)
+      // 2) Record a withdrawal entry for history.
+      //    We now go back to letting the Safaricom callback update the status.
       try {
         const mpesaResp = data && (data.mpesaResponse ?? data);
 
@@ -191,13 +191,13 @@ export default function WithdrawModal({ available, onClose }: WithdrawModalProps
           amount: amountNumber,
           phoneNumber,
 
-          // 🔴 IMPORTANT CHANGE: mark as success immediately so balance + history update
-          status: 'success', // was 'initiated'
+          // ✅ Status is "initiated" – the callback will flip this to "completed"/"failed"
+          status: 'initiated',
 
           createdAt: serverTimestamp(),
           channel: 'mpesa-b2c',
 
-          // 🔗 IDs to match in /api/mpesa/b2c/callback (still there if you later depend on callbacks)
+          // 🔗 IDs to match in /api/mpesa/b2c/callback
           originatorConversationId: mpesaResp?.OriginatorConversationID ?? null,
           conversationId: mpesaResp?.ConversationID ?? null,
 
@@ -207,13 +207,15 @@ export default function WithdrawModal({ available, onClose }: WithdrawModalProps
         console.error('Failed to record withdrawal document:', e);
       }
 
-      setSuccess('Withdrawal request sent successfully.');
+      setSuccess(
+        'Withdrawal request sent. You will receive an M-Pesa SMS once it is processed.',
+      );
       setSubmitting(false);
 
       // small delay so user can see success then close
       setTimeout(() => {
         onClose();
-      }, 1200);
+      }, 1500);
     } catch (err: any) {
       console.error('Withdrawal submit error:', err);
       setError(err?.message || 'Something went wrong. Please try again.');
@@ -263,9 +265,8 @@ export default function WithdrawModal({ available, onClose }: WithdrawModalProps
     }
 
     if (!storedWithdrawPin) {
-      // Should not really happen, but if it does, just let them through
       console.warn(
-        '[WITHDRAW_MODAL] No storedWithdrawPin found, allowing PIN verification by default'
+        '[WITHDRAW_MODAL] No storedWithdrawPin found, allowing PIN verification by default',
       );
       setPinVerified(true);
       return;
