@@ -133,6 +133,41 @@ export default function ProviderDashboard() {
     return cmp.getTime() < today.getTime();
   };
 
+  // ✅ Small helper to safely format dates coming from Firestore
+  const safeDateLabel = (raw: any): string => {
+    if (!raw) return '-';
+
+    let dateObj: Date | null = null;
+
+    // Firestore Timestamp (has toDate())
+    if (typeof raw === 'object' && raw !== null && typeof raw.toDate === 'function') {
+      try {
+        dateObj = raw.toDate();
+      } catch {
+        dateObj = null;
+      }
+    }
+    // Already a Date
+    else if (raw instanceof Date) {
+      dateObj = raw;
+    }
+    // String (ISO / YYYY-MM-DD / whatever)
+    else if (typeof raw === 'string') {
+      const d = new Date(raw);
+      if (!isNaN(d.getTime())) {
+        dateObj = d;
+      }
+    }
+
+    if (!dateObj || isNaN(dateObj.getTime())) return '-';
+
+    try {
+      return dateObj.toLocaleDateString();
+    } catch {
+      return '-';
+    }
+  };
+
   // ✅ Check payout settings
   useEffect(() => {
     if (!user) return;
@@ -161,11 +196,6 @@ export default function ProviderDashboard() {
   }, [user]);
 
   // Helper to compute provider's take-home from a booking doc
-  // ✅ Works with tiered markup & wallet:
-  // 1) Prefer explicit providerAmount / base fields.
-  // 2) If platformFee / markupAmount is present, use total - fee.
-  // 3) If markupRate is present (fraction, e.g. 0.1), reverse that.
-  // 4) Fallback: assume no markup and treat total as provider share (dashboard-only approximation).
   const providerShare = (b: any): number => {
     // 1) Explicit provider-side fields (what the provider should actually receive)
     const explicit = Number(
@@ -664,9 +694,7 @@ export default function ProviderDashboard() {
             {pendingBookings.length > 0 ? (
               <div className="mt-3 max-h-56 overflow-auto border-t pt-2 text-xs text-gray-700 space-y-1">
                 {pendingBookings.map((b) => {
-                  const dateStr = b.date
-                    ? new Date(b.date).toLocaleDateString()
-                    : '-';
+                  const dateStr = safeDateLabel(b.date);
                   const timeStr = b.time || '-';
                   const amount = providerShare(b);
                   return (
