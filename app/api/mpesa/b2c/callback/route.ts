@@ -4,6 +4,50 @@ import { adminDb } from "@/lib/firebaseAdmin";
 
 export const runtime = "nodejs";
 
+// Helper: try a list of field names one by one
+async function findWithdrawalByFields(
+  value: string,
+  fields: string[]
+): Promise<FirebaseFirestore.DocumentReference | null> {
+  if (!value) return null;
+
+  for (const field of fields) {
+    try {
+      console.log(
+        "[M-PESA B2C CALLBACK] Querying withdrawals by",
+        field,
+        "==",
+        value
+      );
+      const snap = await adminDb
+        .collectionGroup("withdrawals")
+        .where(field, "==", value)
+        .limit(1)
+        .get();
+
+      console.log(
+        `[M-PESA B2C CALLBACK] Query by ${field} returned docs:`,
+        snap.size
+      );
+
+      if (!snap.empty) {
+        console.log(
+          `[M-PESA B2C CALLBACK] Matched withdrawal doc (${field}):`,
+          snap.docs[0].id
+        );
+        return snap.docs[0].ref;
+      }
+    } catch (err: any) {
+      console.error(
+        `[M-PESA B2C CALLBACK] Error querying by ${field}:`,
+        err?.message || err
+      );
+    }
+  }
+
+  return null;
+}
+
 export async function POST(req: NextRequest) {
   console.log("📥 [M-PESA B2C CALLBACK] HIT /api/mpesa/b2c/callback");
 
@@ -16,7 +60,7 @@ export async function POST(req: NextRequest) {
 
   console.log(
     "📥 [M-PESA B2C CALLBACK] Raw body:",
-    JSON.stringify(body, null, 2),
+    JSON.stringify(body, null, 2)
   );
 
   try {
@@ -73,63 +117,65 @@ export async function POST(req: NextRequest) {
       completedAt,
     });
 
-    // 🔎 Find the corresponding withdrawal doc using collectionGroup on "withdrawals"
+    // 🔎 Try to find the matching withdrawal doc
     let withdrawalRef: FirebaseFirestore.DocumentReference | null = null;
 
+    // 1️⃣ Try originatorConversationId with multiple possible field names
     if (originatorConversationId) {
-      console.log(
-        "[M-PESA B2C CALLBACK] Querying by originatorConversationId:",
-        originatorConversationId,
-      );
-      const snap = await adminDb
-        .collectionGroup("withdrawals")
-        .where("originatorConversationId", "==", originatorConversationId)
-        .limit(1)
-        .get();
-
-      console.log(
-        "[M-PESA B2C CALLBACK] Query by originatorConversationId returned docs:",
-        snap.size,
-      );
-
-      if (!snap.empty) {
-        withdrawalRef = snap.docs[0].ref;
-        console.log(
-          "[M-PESA B2C CALLBACK] Matched withdrawal doc (originatorConversationId):",
-          snap.docs[0].id,
-        );
-      }
+      withdrawalRef = await findWithdrawalByFields(originatorConversationId, [
+        "originatorConversationId",
+        "OriginatorConversationID",
+        "mpesaOriginatorConversationId",
+      ]);
     }
 
+    // 2️⃣ Try conversationId with multiple possible field names
     if (!withdrawalRef && conversationId) {
-      console.log(
-        "[M-PESA B2C CALLBACK] Querying by conversationId:",
-        conversationId,
-      );
-      const snap2 = await adminDb
-        .collectionGroup("withdrawals")
-        .where("conversationId", "==", conversationId)
-        .limit(1)
-        .get();
+      withdrawalRef = await findWithdrawalByFields(conversationId, [
+        "conversationId",
+        "ConversationID",
+        "mpesaConversationId",
+      ]);
+    }
 
-      console.log(
-        "[M-PESA B2C CALLBACK] Query by conversationId returned docs:",
-        snap2.size,
-      );
-
-      if (!snap2.empty) {
-        withdrawalRef = snap2.docs[0].ref;
+    // 3️⃣ Fallback: by amount (find any withdrawal with that amount)
+    if (!withdrawalRef && amount !== null && !Number.isNaN(amount)) {
+      try {
         console.log(
-          "[M-PESA B2C CALLBACK] Matched withdrawal doc (conversationId):",
-          snap2.docs[0].id,
+          "[M-PESA B2C CALLBACK] Fallback query by amount:",
+          amount
+        );
+
+        const fallbackSnap = await adminDb
+          .collectionGroup("withdrawals")
+          .where("amount", "==", amount)
+          .limit(1)
+          .get();
+
+        console.log(
+          "[M-PESA B2C CALLBACK] Fallback amount query docs:",
+          fallbackSnap.size
+        );
+
+        if (!fallbackSnap.empty) {
+          withdrawalRef = fallbackSnap.docs[0].ref;
+          console.log(
+            "[M-PESA B2C CALLBACK] Matched withdrawal doc (fallback amount):",
+            fallbackSnap.docs[0].id
+          );
+        }
+      } catch (err: any) {
+        console.error(
+          "[M-PESA B2C CALLBACK] Error in amount fallback query:",
+          err?.message || err
         );
       }
     }
 
     if (!withdrawalRef) {
       console.warn(
-        "[M-PESA B2C CALLBACK] No matching withdrawal document found for IDs:",
-        { originatorConversationId, conversationId },
+        "[M-PESA B2C CALLBACK] No matching withdrawal document found for IDs / amount:",
+        { originatorConversationId, conversationId, amount }
       );
       // Still ACK the callback so Safaricom stops retrying
       return NextResponse.json({ ResultCode: 0, ResultDesc: "Accepted" });
@@ -138,7 +184,7 @@ export async function POST(req: NextRequest) {
     // ✅ Update withdrawal status based on ResultCode
     if (resultCode === 0) {
       console.log(
-        "✅ [M-PESA B2C CALLBACK] Payment success, marking withdrawal as success",
+        "✅ [M-PESA B2C CALLBACK] Payment success, marking withdrawal as success"
       );
       await withdrawalRef.set(
         {
@@ -154,16 +200,16 @@ export async function POST(req: NextRequest) {
           mpesaRawCallback: body,
           updatedAt: Date.now(),
         },
-        { merge: true },
+        { merge: true }
       );
       console.log(
-        "✅ [M-PESA B2C CALLBACK] Withdrawal doc updated to success.",
+        "✅ [M-PESA B2C CALLBACK] Withdrawal doc updated to success."
       );
     } else {
       console.log(
         "❌ [M-PESA B2C CALLBACK] Payment failed",
         resultCode,
-        resultDesc,
+        resultDesc
       );
       await withdrawalRef.set(
         {
@@ -175,10 +221,10 @@ export async function POST(req: NextRequest) {
           mpesaRawCallback: body,
           updatedAt: Date.now(),
         },
-        { merge: true },
+        { merge: true }
       );
       console.log(
-        "❌ [M-PESA B2C CALLBACK] Withdrawal doc updated to failed.",
+        "❌ [M-PESA B2C CALLBACK] Withdrawal doc updated to failed."
       );
     }
 

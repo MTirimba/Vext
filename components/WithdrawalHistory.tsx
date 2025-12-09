@@ -1,3 +1,4 @@
+// /workspaces/Vext/components/WithdrawalHistory.tsx
 "use client";
 
 import React, { useEffect, useState } from "react";
@@ -44,14 +45,26 @@ export default function WithdrawalHistory() {
             amount: Number(data.amount) || 0,
             fee: typeof data.fee === "number" ? data.fee : undefined,
             net: typeof data.net === "number" ? data.net : undefined,
-            method: typeof data.method === "string" ? data.method : data.channel,
-            phone: typeof data.phoneNumber === "string"
-              ? data.phoneNumber
-              : typeof data.phone === "string"
-              ? data.phone
-              : undefined,
+            method:
+              typeof data.method === "string"
+                ? data.method
+                : typeof data.channel === "string"
+                ? data.channel
+                : undefined,
+            phone:
+              typeof data.phoneNumber === "string"
+                ? data.phoneNumber
+                : typeof data.phone === "string"
+                ? data.phone
+                : undefined,
             status: typeof data.status === "string" ? data.status : undefined,
-            receipt: typeof data.receipt === "string" ? data.receipt : undefined,
+            // 👇 support both legacy "receipt" and new "mpesaReceipt"
+            receipt:
+              typeof data.receipt === "string"
+                ? data.receipt
+                : typeof data.mpesaReceipt === "string"
+                ? data.mpesaReceipt
+                : undefined,
             createdAt: data.createdAt,
             updatedAt: data.updatedAt,
           };
@@ -82,17 +95,14 @@ export default function WithdrawalHistory() {
     try {
       if (!ts) return "—";
 
-      // Firestore Timestamp (v9)
       if (ts.toDate && typeof ts.toDate === "function") {
         return ts.toDate().toLocaleString();
       }
 
-      // { seconds, nanoseconds }
       if (typeof ts.seconds === "number") {
         return new Date(ts.seconds * 1000).toLocaleString();
       }
 
-      // Fallback: try to construct a Date
       const d = new Date(ts);
       if (!isNaN(d.getTime())) {
         return d.toLocaleString();
