@@ -1,7 +1,7 @@
 // /workspaces/Vext/app/provider/dashboard/page.tsx
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import { auth, db } from '@/lib/firebase';
 import { useAuthState } from 'react-firebase-hooks/auth';
 import {
@@ -15,12 +15,6 @@ import {
   setDoc,
   deleteDoc,
 } from 'firebase/firestore';
-import {
-  motion,
-  AnimatePresence,
-  useMotionValue,
-  useTransform,
-} from 'framer-motion';
 import Calendar from 'react-calendar';
 import 'react-calendar/dist/Calendar.css';
 import WithdrawModal from '@/components/WithdrawModal';
@@ -62,7 +56,9 @@ export default function ProviderDashboard() {
   const router = useRouter();
 
   // ----- UI tabs -----
-  const [activeTab, setActiveTab] = useState<'wallet' | 'stats' | 'availability'>('wallet');
+  const [activeTab, setActiveTab] = useState<'wallet' | 'stats' | 'availability'>(
+    'wallet',
+  );
 
   // ----- wallet state -----
   const [loading, setLoading] = useState(true);
@@ -79,12 +75,6 @@ export default function ProviderDashboard() {
     { id: string; [key: string]: any }[]
   >([]);
 
-  // Animated number state
-  const motionBalance = useMotionValue(balance);
-  const displayBalance = useTransform(motionBalance, (latest) =>
-    latest.toFixed(2),
-  );
-
   // ----- stats state -----
   const [statsLoading, setStatsLoading] = useState(false);
   const [bookingSummary, setBookingSummary] = useState<BookingSummary | null>(
@@ -95,32 +85,12 @@ export default function ProviderDashboard() {
   const [loyalClients, setLoyalClients] = useState<ClientStat[]>([]);
   const [lostRevenue, setLostRevenue] = useState(0); // refunded/lost value
 
-  const mostBookedServices = useMemo(
-    () =>
-      [...videoStats]
-        .sort((a, b) => b.bookings - a.bookings)
-        .slice(0, 5),
-    [videoStats],
-  );
-
-  const mostLikedVideos = useMemo(
-    () =>
-      [...videoStats]
-        .sort((a, b) => b.likes - a.likes)
-        .slice(0, 5),
-    [videoStats],
-  );
-
   // ----- availability / away days state -----
   const [awayDates, setAwayDates] = useState<string[]>([]);
   const [availabilityLoading, setAvailabilityLoading] = useState(false);
   const [selectedAvailabilityDate, setSelectedAvailabilityDate] = useState<Date>(
     () => new Date(),
   );
-
-  useEffect(() => {
-    motionBalance.set(balance);
-  }, [balance, motionBalance]);
 
   // Utility: date → YYYY-MM-DD (same as bookings use)
   const dateToISO = (d: Date) => d.toISOString().split('T')[0];
@@ -131,41 +101,6 @@ export default function ProviderDashboard() {
     const cmp = new Date(d);
     cmp.setHours(0, 0, 0, 0);
     return cmp.getTime() < today.getTime();
-  };
-
-  // ✅ Small helper to safely format dates coming from Firestore
-  const safeDateLabel = (raw: any): string => {
-    if (!raw) return '-';
-
-    let dateObj: Date | null = null;
-
-    // Firestore Timestamp (has toDate())
-    if (typeof raw === 'object' && raw !== null && typeof raw.toDate === 'function') {
-      try {
-        dateObj = raw.toDate();
-      } catch {
-        dateObj = null;
-      }
-    }
-    // Already a Date
-    else if (raw instanceof Date) {
-      dateObj = raw;
-    }
-    // String (ISO / YYYY-MM-DD / whatever)
-    else if (typeof raw === 'string') {
-      const d = new Date(raw);
-      if (!isNaN(d.getTime())) {
-        dateObj = d;
-      }
-    }
-
-    if (!dateObj || isNaN(dateObj.getTime())) return '-';
-
-    try {
-      return dateObj.toLocaleDateString();
-    } catch {
-      return '-';
-    }
   };
 
   // ✅ Check payout settings
@@ -189,13 +124,20 @@ export default function ProviderDashboard() {
           setHasPayoutSettings(false);
         }
       } else {
-        console.warn('[PROVIDER_DASHBOARD] No user doc while checking payout settings');
+        console.warn(
+          '[PROVIDER_DASHBOARD] No user doc while checking payout settings',
+        );
         setHasPayoutSettings(false);
       }
     });
   }, [user]);
 
   // Helper to compute provider's take-home from a booking doc
+  // ✅ Works with tiered markup & wallet:
+  // 1) Prefer explicit providerAmount / base fields.
+  // 2) If platformFee / markupAmount is present, use total - fee.
+  // 3) If markupRate is present (fraction, e.g. 0.1), reverse that.
+  // 4) Fallback: assume no markup and treat total as provider share (dashboard-only approximation).
   const providerShare = (b: any): number => {
     // 1) Explicit provider-side fields (what the provider should actually receive)
     const explicit = Number(
@@ -518,6 +460,7 @@ export default function ProviderDashboard() {
     return () => unsub();
   }, [user]);
 
+  // Early returns AFTER all hooks (no hooks below this point)
   if (!user) return <p className="p-6">Please sign in to view this page.</p>;
   if (loading && activeTab === 'wallet')
     return <p className="p-6">Loading balance…</p>;
@@ -596,15 +539,23 @@ export default function ProviderDashboard() {
     }
   };
 
-  // Derived list of upcoming away days for display
-  const upcomingAwayDays = useMemo(() => {
+  // Derived lists (no hooks, just plain computations)
+  const mostBookedServices = [...videoStats]
+    .sort((a, b) => b.bookings - a.bookings)
+    .slice(0, 5);
+
+  const mostLikedVideos = [...videoStats]
+    .sort((a, b) => b.likes - a.likes)
+    .slice(0, 5);
+
+  const upcomingAwayDays = (() => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     return awayDates
       .map((d) => ({ date: d, asDate: new Date(d) }))
       .filter((x) => x.asDate.getTime() >= today.getTime())
       .sort((a, b) => a.asDate.getTime() - b.asDate.getTime());
-  }, [awayDates]);
+  })();
 
   return (
     <div className="p-6 max-w-2xl mx-auto">
@@ -652,26 +603,9 @@ export default function ProviderDashboard() {
           {/* Wallet balance */}
           <div className="p-6 bg-white shadow rounded mb-4">
             <h2 className="font-semibold text-gray-600">Available Balance</h2>
-            <AnimatePresence mode="wait">
-              <motion.p
-                key={balance}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.6 }}
-                className="text-3xl font-bold text-green-700 mt-2"
-              >
-                KSH{' '}
-                <motion.span
-                  animate={{
-                    opacity: [0.6, 1],
-                    transition: { duration: 0.6 },
-                  }}
-                >
-                  {displayBalance.get()}
-                </motion.span>
-              </motion.p>
-            </AnimatePresence>
+            <p className="text-3xl font-bold text-green-700 mt-2">
+              KSH {balance.toFixed(2)}
+            </p>
             <p className="mt-2 text-xs text-gray-500">
               Only bookings whose Service Release PIN has been verified are
               included in this balance. Withdrawals reduce this balance only
@@ -694,7 +628,9 @@ export default function ProviderDashboard() {
             {pendingBookings.length > 0 ? (
               <div className="mt-3 max-h-56 overflow-auto border-t pt-2 text-xs text-gray-700 space-y-1">
                 {pendingBookings.map((b) => {
-                  const dateStr = safeDateLabel(b.date);
+                  const dateStr = b.date
+                    ? new Date(b.date).toLocaleDateString()
+                    : '-';
                   const timeStr = b.time || '-';
                   const amount = providerShare(b);
                   return (
@@ -990,7 +926,7 @@ export default function ProviderDashboard() {
               <ul className="text-xs text-gray-700 space-y-1">
                 {upcomingAwayDays.map((d) => (
                   <li key={d.date} className="flex justify-between">
-                    <span>{new Date(d.date).toDateString()}</span>
+                    <span>{d.asDate.toDateString()}</span>
                     <button
                       type="button"
                       onClick={() => handleToggleAwayDate(d.asDate)}
