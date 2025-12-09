@@ -1076,7 +1076,16 @@ export default function VideoFeed() {
   };
 
   return (
-    <div className="relative h-screen min-h-[100dvh] w-full bg-black text-white overflow-hidden">
+    <div
+      className="relative h-screen min-h-[100dvh] w-full bg-black text-white overflow-hidden"
+      style={{
+        // Respect device notches / system UI
+        paddingTop: 'env(safe-area-inset-top)',
+        paddingBottom: 'env(safe-area-inset-bottom)',
+        paddingLeft: 'env(safe-area-inset-left)',
+        paddingRight: 'env(safe-area-inset-right)',
+      }}
+    >
       {/* Top-right controls */}
       <div className="absolute top-3 right-3 z-50 flex items-center space-x-2">
         {/* Inline search */}
@@ -1493,10 +1502,34 @@ export default function VideoFeed() {
             ? `/creator/${v.userId}`
             : '/';
 
+          const avatarUrl =
+            up.businessProfilePhoto ||
+            up.profilePhoto ||
+            undefined;
+
+          const fallbackInitial = (
+            up.businessName?.[0] ||
+            businessHandle?.[0] ||
+            personalHandle?.[0] ||
+            'U'
+          ).toUpperCase();
+
+          const displayName = up.businessName
+            ? up.businessName
+            : businessHandle
+            ? `@${businessHandle}`
+            : personalHandle
+            ? `@${personalHandle}`
+            : '@unknown';
+
           return (
             <div
               key={`${v.id}-${i}`}
-              className="relative h-screen min-h-[100dvh] flex items-center justify-center snap-start pb-24"
+              className="relative h-screen min-h-[100dvh] flex items-center justify-center snap-start"
+              style={{
+                paddingTop: 'env(safe-area-inset-top)',
+                paddingBottom: 'env(safe-area-inset-bottom)',
+              }}
             >
               {/* Stack badge */}
               {hasCarousel && (
@@ -1603,22 +1636,37 @@ export default function VideoFeed() {
                 </>
               )}
 
-              {/* Creator pill */}
-              <div
+              {/* Creator pill with business avatar + name */}
+              <button
+                type="button"
                 onClick={() => router.push(creatorUrl)}
-                className="absolute top-3 left-3 bg-black/70 px-1 py-0.5 rounded-md cursor-pointer hover:bg-black/90 transition text-xs font-semibold text-white z-50"
+                className="absolute top-3 left-3 z-50 flex items-center gap-2 bg-black/70 px-2 py-1 rounded-full cursor-pointer hover:bg-black/90 transition text-xs text-white"
               >
-                {up.businessName
-                  ? up.businessName
-                  : businessHandle
-                  ? `@${businessHandle}`
-                  : personalHandle
-                  ? `@${personalHandle}`
-                  : '@unknown'}
-              </div>
+                {avatarUrl ? (
+                  <img
+                    src={avatarUrl}
+                    alt={displayName}
+                    className="w-8 h-8 rounded-full object-cover border border-white/40"
+                  />
+                ) : (
+                  <div className="w-8 h-8 rounded-full bg-gray-500 flex items-center justify-center text-[11px] font-semibold border border-white/30">
+                    {fallbackInitial}
+                  </div>
+                )}
+                <div className="flex flex-col items-start leading-tight">
+                  <span className="font-semibold max-w-[160px] truncate">
+                    {displayName}
+                  </span>
+                  {up.location && (
+                    <span className="text-[10px] text-gray-300 max-w-[160px] truncate">
+                      {up.location}
+                    </span>
+                  )}
+                </div>
+              </button>
 
               {/* Actions */}
-              <div className="pointer-events-auto absolute right-2 bottom-6 flex flex-col items-center space-y-3 z-50">
+              <div className="pointer-events-auto absolute right-2 bottom-8 sm:bottom-10 flex flex-col items-center space-y-3 z-50">
                 <button onClick={() => handleLike(v.id)} className="text-xl">
                   {liked ? (
                     <FaHeart className="text-red-500" />
@@ -1990,7 +2038,7 @@ function PostShareModal({
               value={shareText}
               className="w-full border rounded px-2 py-2 text-xs bg-gray-50 h-20 resize-none text-gray-800"
             />
-            <div className="mt-2 flex gap-2 flex-wrap">
+            <div className="mt-2 flex gap-2flex-wrap">
               <button
                 type="button"
                 onClick={() => copyTextAndNotify()}
