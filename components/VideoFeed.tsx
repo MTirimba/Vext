@@ -39,6 +39,7 @@ import {
   FaTwitter,
   FaEnvelope,
   FaInstagram,
+  FaUser, // 👈 NEW: generic user icon for top-right menu button
 } from 'react-icons/fa';
 import { SiTiktok } from 'react-icons/si';
 import { useRouter } from 'next/navigation';
@@ -1076,18 +1077,14 @@ export default function VideoFeed() {
   };
 
   return (
-    <div
-      className="relative h-screen min-h-[100dvh] w-full bg-black text-white overflow-hidden"
-      style={{
-        // Respect device notches / system UI
-        paddingTop: 'env(safe-area-inset-top)',
-        paddingBottom: 'env(safe-area-inset-bottom)',
-        paddingLeft: 'env(safe-area-inset-left)',
-        paddingRight: 'env(safe-area-inset-right)',
-      }}
-    >
+    <div className="relative h-screen min-h-[100dvh] w-full bg-black text-white overflow-hidden">
       {/* Top-right controls */}
-      <div className="absolute top-3 right-3 z-50 flex items-center space-x-2">
+      <div
+        className="absolute right-3 z-50 flex items-center space-x-2"
+        style={{
+          top: 'calc(env(safe-area-inset-top, 0px) + 0.75rem)',
+        }}
+      >
         {/* Inline search */}
         <div
           className={`flex items-center transition-all duration-300 ${
@@ -1141,23 +1138,13 @@ export default function VideoFeed() {
           <FaSlidersH />
         </button>
 
-        {/* Avatar / menu with attention dot */}
+        {/* Avatar / menu with attention dot – now a plain user icon */}
         <div className="relative">
           <button
             onClick={() => setDropdownOpen(!dropdownOpen)}
-            className="focus:outline-none relative"
+            className="focus:outline-none relative h-8 w-8 flex items-center justify-center"
           >
-            {user?.photoURL ? (
-              <img
-                src={user.photoURL}
-                alt="profile"
-                className="w-9 h-9 rounded-full object-cover border border-white/40"
-              />
-            ) : (
-              <div className="w-9 h-9 bg-gray-400 rounded-full flex items-center justify-center">
-                <span className="text-white font-medium">U</span>
-              </div>
-            )}
+            <FaUser className="w-5 h-5" />
 
             {hasAnyAttentionDot && (
               <span className="absolute -top-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-400 border border-black" />
@@ -1177,7 +1164,7 @@ export default function VideoFeed() {
                       />
                     ) : (
                       <div className="w-8 h-8 bg-gray-600 rounded-full flex items-center justify-center">
-                        <span className="text-white">U</span>
+                        <FaUser className="w-4 h-4" />
                       </div>
                     )}
                     <span className="font-semibold truncate">@{username}</span>
@@ -1331,7 +1318,12 @@ export default function VideoFeed() {
 
       {/* Clear search/filters pill (top-left) */}
       {anyFilterActive && (
-        <div className="absolute top-3 left-3 z-50">
+        <div
+          className="absolute left-3 z-50"
+          style={{
+            top: 'calc(env(safe-area-inset-top, 0px) + 0.75rem)',
+          }}
+        >
           <button
             type="button"
             onClick={handleClearSearchAndFilters}
@@ -1502,38 +1494,19 @@ export default function VideoFeed() {
             ? `/creator/${v.userId}`
             : '/';
 
-          const avatarUrl =
-            up.businessProfilePhoto ||
-            up.profilePhoto ||
-            undefined;
-
-          const fallbackInitial = (
-            up.businessName?.[0] ||
-            businessHandle?.[0] ||
-            personalHandle?.[0] ||
-            'U'
-          ).toUpperCase();
-
-          const displayName = up.businessName
-            ? up.businessName
-            : businessHandle
-            ? `@${businessHandle}`
-            : personalHandle
-            ? `@${personalHandle}`
-            : '@unknown';
-
           return (
             <div
               key={`${v.id}-${i}`}
               className="relative h-screen min-h-[100dvh] flex items-center justify-center snap-start"
-              style={{
-                paddingTop: 'env(safe-area-inset-top)',
-                paddingBottom: 'env(safe-area-inset-bottom)',
-              }}
             >
               {/* Stack badge */}
               {hasCarousel && (
-                <div className="absolute top-3 right-3 z-50">
+                <div
+                  className="absolute right-3 z-50"
+                  style={{
+                    top: 'calc(env(safe-area-inset-top, 0px) + 0.75rem)',
+                  }}
+                >
                   <div className="bg-black/70 text-white rounded-full p-2 flex items-center justify-center">
                     <FaImages className="text-sm" />
                   </div>
@@ -1623,7 +1596,13 @@ export default function VideoFeed() {
                   </button>
 
                   {/* Dots indicator */}
-                  <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-50 flex space-x-1">
+                  <div
+                    className="absolute left-1/2 -translate-x-1/2 z-50 flex space-x-1"
+                    style={{
+                      bottom:
+                        'calc(env(safe-area-inset-bottom, 0px) + 0.75rem)',
+                    }}
+                  >
                     {media.map((_, idx) => (
                       <span
                         key={idx}
@@ -1636,37 +1615,41 @@ export default function VideoFeed() {
                 </>
               )}
 
-              {/* Creator pill with business avatar + name */}
-              <button
-                type="button"
+              {/* Creator pill – with safe top inset */}
+              <div
                 onClick={() => router.push(creatorUrl)}
-                className="absolute top-3 left-3 z-50 flex items-center gap-2 bg-black/70 px-2 py-1 rounded-full cursor-pointer hover:bg-black/90 transition text-xs text-white"
+                className="absolute left-3 bg-black/70 px-1 py-0.5 rounded-md cursor-pointer hover:bg-black/90 transition text-xs font-semibold text-white z-50 flex items-center gap-2"
+                style={{
+                  top: 'calc(env(safe-area-inset-top, 0px) + 0.75rem)',
+                }}
               >
-                {avatarUrl ? (
+                {/* Business avatar on feed (business profile photo) */}
+                {up.businessProfilePhoto ? (
                   <img
-                    src={avatarUrl}
-                    alt={displayName}
-                    className="w-8 h-8 rounded-full object-cover border border-white/40"
+                    src={up.businessProfilePhoto}
+                    alt={up.businessName || 'business'}
+                    className="w-6 h-6 rounded-full object-cover border border-white/40"
                   />
-                ) : (
-                  <div className="w-8 h-8 rounded-full bg-gray-500 flex items-center justify-center text-[11px] font-semibold border border-white/30">
-                    {fallbackInitial}
-                  </div>
-                )}
-                <div className="flex flex-col items-start leading-tight">
-                  <span className="font-semibold max-w-[160px] truncate">
-                    {displayName}
-                  </span>
-                  {up.location && (
-                    <span className="text-[10px] text-gray-300 max-w-[160px] truncate">
-                      {up.location}
-                    </span>
-                  )}
-                </div>
-              </button>
+                ) : null}
+                <span>
+                  {up.businessName
+                    ? up.businessName
+                    : businessHandle
+                    ? `@${businessHandle}`
+                    : personalHandle
+                    ? `@${personalHandle}`
+                    : '@unknown'}
+                </span>
+              </div>
 
-              {/* Actions */}
-              <div className="pointer-events-auto absolute right-2 bottom-8 sm:bottom-10 flex flex-col items-center space-y-3 z-50">
+              {/* Actions – aligned to right & lifted above bottom safe area */}
+              <div
+                className="pointer-events-auto absolute right-3 flex flex-col items-end space-y-3 z-50"
+                style={{
+                  bottom:
+                    'calc(env(safe-area-inset-bottom, 0px) + 1.5rem)',
+                }}
+              >
                 <button onClick={() => handleLike(v.id)} className="text-xl">
                   {liked ? (
                     <FaHeart className="text-red-500" />
@@ -1720,9 +1703,15 @@ export default function VideoFeed() {
                 </div>
               )}
 
-              {/* Text + Price */}
+              {/* Text + Price – also lifted above nav bar */}
               {(v.title || v.description || displayedPrice !== null) && (
-                <div className="absolute bottom-3 left-3 max-w-[60%] overflow-hidden text-ellipsis z-50">
+                <div
+                  className="absolute left-3 max-w-[60%] overflow-hidden text-ellipsis z-50"
+                  style={{
+                    bottom:
+                      'calc(env(safe-area-inset-bottom, 0px) + 1.5rem)',
+                  }}
+                >
                   {v.title && (
                     <h3 className="text-sm font-bold text-white">{v.title}</h3>
                   )}
@@ -2038,7 +2027,7 @@ function PostShareModal({
               value={shareText}
               className="w-full border rounded px-2 py-2 text-xs bg-gray-50 h-20 resize-none text-gray-800"
             />
-            <div className="mt-2 flex gap-2flex-wrap">
+            <div className="mt-2 flex gap-2 flex-wrap">
               <button
                 type="button"
                 onClick={() => copyTextAndNotify()}
