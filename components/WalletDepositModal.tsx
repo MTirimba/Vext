@@ -59,7 +59,9 @@ function normalizeKeMpesaPhone(raw: string) {
   );
 }
 
-export default function WalletDepositModal({ onClose }: WalletDepositModalProps) {
+export default function WalletDepositModal({
+  onClose,
+}: WalletDepositModalProps) {
   const [user] = useAuthState(auth);
 
   const [amount, setAmount] = useState<string>('');
@@ -221,6 +223,7 @@ export default function WalletDepositModal({ onClose }: WalletDepositModalProps)
             amount: amt,
             walletDeposit: true,
             userId: user.uid,
+            description: 'Wallet deposit to VextUp',
           }),
         });
 
@@ -284,7 +287,9 @@ export default function WalletDepositModal({ onClose }: WalletDepositModalProps)
             <select
               className="w-full border rounded px-3 py-2 text-sm"
               value={paymentMethod}
-              onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
+              onChange={(e) =>
+                setPaymentMethod(e.target.value as PaymentMethod)
+              }
               disabled={mpesaPending || loading}
             >
               <option value="">-- choose --</option>
@@ -306,8 +311,8 @@ export default function WalletDepositModal({ onClose }: WalletDepositModalProps)
                 className="border rounded px-2 py-[3px] text-sm"
               />
               <p className="mt-1 text-[11px] text-gray-500">
-                You can enter 07XXXXXXXX, 7XXXXXXXX, 2547XXXXXXXX or +2547XXXXXXXX.
-                We&apos;ll format it automatically.
+                You can enter 07XXXXXXXX, 7XXXXXXXX, 2547XXXXXXXX or
+                +2547XXXXXXXX. We&apos;ll format it automatically.
               </p>
             </div>
           )}

@@ -1,4 +1,4 @@
-// /app/api/mpesa/init/route.ts
+// /workspaces/Vext/app/api/mpesa/init/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
 
@@ -43,18 +43,34 @@ export async function POST(req: NextRequest) {
       bookingId,
       accountReference,
       description,
+      walletDeposit,
+      userId,
     } = body as {
       phoneNumber?: string;
       amount?: number | string;
       bookingId?: string;
       accountReference?: string;
       description?: string;
+      walletDeposit?: boolean;
+      userId?: string;
     };
 
-    if (!phoneNumber || !amount || !bookingId) {
-      console.warn("[M-PESA INIT] Missing phoneNumber, amount or bookingId");
+    const isWalletDeposit = !!walletDeposit;
+
+    // ✅ For both bookings and wallet deposits: phone + amount are required
+    if (!phoneNumber || !amount) {
+      console.warn("[M-PESA INIT] Missing phoneNumber or amount");
       return NextResponse.json(
-        { error: "Missing phoneNumber, amount or bookingId" },
+        { error: "Missing phoneNumber or amount" },
+        { status: 400 },
+      );
+    }
+
+    // ✅ Only require bookingId if this is NOT a wallet deposit
+    if (!isWalletDeposit && !bookingId) {
+      console.warn("[M-PESA INIT] Missing bookingId for booking payment");
+      return NextResponse.json(
+        { error: "Missing bookingId for booking payment" },
         { status: 400 },
       );
     }
@@ -122,7 +138,6 @@ export async function POST(req: NextRequest) {
       `${baseUrl}/oauth/v1/generate?grant_type=client_credentials`,
       {
         headers: { Authorization: `Basic ${auth}` },
-        // ensure no caching
         cache: "no-store",
       },
     );
@@ -166,6 +181,23 @@ export async function POST(req: NextRequest) {
       "base64",
     );
 
+    const fallbackWalletRef =
+      `WALLET-${(userId || "").slice(-6).toUpperCase() || "TOPUP"}-${Date.now()
+        .toString(36)
+        .toUpperCase()}`;
+
+    const finalAccountRef =
+      accountReference ||
+      (isWalletDeposit ? fallbackWalletRef : bookingId || "BOOKING");
+
+    const finalDescription =
+      description ||
+      (isWalletDeposit
+        ? "Wallet deposit"
+        : bookingId
+        ? `Booking ${bookingId}`
+        : "Booking payment");
+
     const stkPayload = {
       BusinessShortCode: shortcode,
       Password: password,
@@ -176,8 +208,8 @@ export async function POST(req: NextRequest) {
       PartyB: tillNumber, // Till number
       PhoneNumber: sanitizedPhone,
       CallBackURL: callbackUrl,
-      AccountReference: accountReference || bookingId,
-      TransactionDesc: description || `Booking ${bookingId}`,
+      AccountReference: finalAccountRef,
+      TransactionDesc: finalDescription,
     };
 
     console.log("📦 [M-PESA INIT] STK Payload:", {
@@ -224,33 +256,59 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 4️⃣ Store CheckoutRequestID → booking for the callback to find
+    // 4️⃣ Store CheckoutRequestID mapping for callback
     try {
-      if (stkData.CheckoutRequestID && bookingId) {
-        await adminDb.collection("bookings").doc(bookingId).set(
-          {
-            mpesaCheckoutRequestId: stkData.CheckoutRequestID,
-            mpesaMerchantRequestId: stkData.MerchantRequestID || null,
-            mpesaRequestedAt: Date.now(),
-          },
-          { merge: true },
-        );
-        console.log(
-          "🧾 [M-PESA INIT] Stored mpesaCheckoutRequestId on booking",
-          bookingId,
-        );
+      if (stkData.CheckoutRequestID) {
+        if (isWalletDeposit) {
+          // Map STK -> wallet topup intent
+          await adminDb
+            .collection("walletTopups")
+            .doc(stkData.CheckoutRequestID)
+            .set(
+              {
+                userId: userId || null,
+                amount: parsedAmount,
+                phoneNumber: sanitizedPhone,
+                createdAt: Date.now(),
+                status: "PENDING",
+                type: "wallet_deposit",
+              },
+              { merge: true },
+            );
+          console.log(
+            "🧾 [M-PESA INIT] Stored wallet topup intent",
+            stkData.CheckoutRequestID,
+          );
+        } else if (bookingId) {
+          // Existing behaviour for bookings
+          await adminDb.collection("bookings").doc(bookingId).set(
+            {
+              mpesaCheckoutRequestId: stkData.CheckoutRequestID,
+              mpesaMerchantRequestId: stkData.MerchantRequestID || null,
+              mpesaRequestedAt: Date.now(),
+            },
+            { merge: true },
+          );
+          console.log(
+            "🧾 [M-PESA INIT] Stored mpesaCheckoutRequestId on booking",
+            bookingId,
+          );
+        } else {
+          console.warn(
+            "⚠️ [M-PESA INIT] Got CheckoutRequestID but neither walletDeposit nor bookingId was provided",
+          );
+        }
       } else {
         console.warn(
-          "⚠️ [M-PESA INIT] No CheckoutRequestID or bookingId to store on booking",
+          "⚠️ [M-PESA INIT] No CheckoutRequestID returned in STK response",
         );
       }
     } catch (e) {
       console.error(
-        "❌ [M-PESA INIT] Failed to store mpesa IDs on booking:",
+        "❌ [M-PESA INIT] Failed to store mpesa IDs / topup intent:",
         e,
       );
-      // Don't fail the client just because we couldn't store metadata;
-      // the callback may still succeed based on other identifiers.
+      // Do not fail the client just because metadata storage failed
     }
 
     return NextResponse.json(stkData, { status: 200 });
