@@ -1076,7 +1076,7 @@ export default function VideoFeed() {
   };
 
   return (
-    <div className="relative h-screen w-full bg-black text-white overflow-hidden">
+    <div className="relative h-screen min-h-[100dvh] w-full bg-black text-white overflow-hidden">
       {/* Top-right controls */}
       <div className="absolute top-3 right-3 z-50 flex items-center space-x-2">
         {/* Inline search */}
@@ -1326,7 +1326,7 @@ export default function VideoFeed() {
           <button
             type="button"
             onClick={handleClearSearchAndFilters}
-            className="px-3 py-1.5 rounded-full bg-white/10 border border-white/30 text-xs text-white hover:bg-white/20 flex itemscenter gap-2"
+            className="px-3 py-1.5 rounded-full bg-white/10 border border-white/30 text-xs text-white hover:bg-white/20 flex items-center gap-2"
           >
             <span>Clear search / filters</span>
             <FaTimes className="text-[10px]" />
@@ -1458,7 +1458,7 @@ export default function VideoFeed() {
       {/* Scroll-snap container */}
       <div
         ref={sliderRef}
-        className="h-screen overflow-y-scroll snap-y snap-mandatory scroll-smooth [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]"
+        className="h-screen min-h-[100dvh] overflow-y-scroll snap-y snap-mandatory scroll-smooth [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]"
       >
         {filteredVideos.map((v, i) => {
           const up = userProfiles[v.userId || ''] || {};
@@ -1496,7 +1496,7 @@ export default function VideoFeed() {
           return (
             <div
               key={`${v.id}-${i}`}
-              className="relative h-screen flex items-center justify-center snap-start"
+              className="relative h-screen min-h-[100dvh] flex items-center justify-center snap-start pb-24"
             >
               {/* Stack badge */}
               {hasCarousel && (
@@ -1618,7 +1618,7 @@ export default function VideoFeed() {
               </div>
 
               {/* Actions */}
-              <div className="absolute bottom-3 right-3 flex flex-col items-center space-y-2 z-50">
+              <div className="pointer-events-auto absolute right-2 bottom-6 flex flex-col items-center space-y-3 z-50">
                 <button onClick={() => handleLike(v.id)} className="text-xl">
                   {liked ? (
                     <FaHeart className="text-red-500" />
@@ -1648,7 +1648,7 @@ export default function VideoFeed() {
                 )}
                 <button
                   onClick={() => setBookingVideo(v)}
-                  className="bg-green-500 hover:bg-green-600 text-white px-2 py-1 rounded text-xs"
+                  className="bg-green-500 hover:bg-green-600 text-white px-3 py-1.5 rounded-full text-xs shadow-md"
                 >
                   Book Service
                 </button>
@@ -1852,7 +1852,7 @@ function PostShareModal({
   })();
 
   return (
-    <div className="fixed inset-0 z-[9999] bgblack/70 flex items-center justify-center">
+    <div className="fixed inset-0 z-[9999] bg-black/70 flex items-center justify-center">
       <div className="bg-white rounded-lg shadow-xl w-[95vw] max-w-md p-5">
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-sm font-semibold text-gray-900">
