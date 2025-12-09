@@ -31,8 +31,8 @@ export async function POST(req: NextRequest) {
     const originatorConversationId: string | undefined =
       result.OriginatorConversationID;
     const conversationId: string | undefined = result.ConversationID;
-    const resultCode: number = result.ResultCode;
-    const resultDesc: string = result.ResultDesc;
+    const resultCode: number = Number(result.ResultCode);
+    const resultDesc: string = String(result.ResultDesc ?? "");
 
     console.log("[M-PESA B2C CALLBACK] IDs:", {
       originatorConversationId,
@@ -74,98 +74,77 @@ export async function POST(req: NextRequest) {
       completedAt,
     });
 
-    if (!originatorConversationId) {
+    if (!originatorConversationId && !conversationId) {
       console.warn(
-        "[M-PESA B2C CALLBACK] Missing OriginatorConversationID; cannot map to withdrawal",
+        "[M-PESA B2C CALLBACK] Missing both OriginatorConversationID and ConversationID; cannot map to withdrawal",
       );
       return NextResponse.json({ ResultCode: 0, ResultDesc: "Accepted" });
     }
 
-    // ─────────────────────────────────────────────
-    // 1️⃣ Find mapping → withdrawal document
-    // ─────────────────────────────────────────────
-    let mapping: {
-      userId?: string;
-      withdrawalId?: string;
-      conversationId?: string;
-      amount?: number;
-      phoneNumber?: string;
-    } | null = null;
+    // 🔎 Step 1: Find the withdrawal doc using collectionGroup
+    let withdrawalSnap:
+      FirebaseFirestore.QuerySnapshot<FirebaseFirestore.DocumentData> | null =
+      null;
 
-    // Prefer the inexpensive direct mapping document
-    const mappingSnap = await adminDb
-      .collection("mpesaWithdrawals")
-      .doc(originatorConversationId)
-      .get();
-
-    if (mappingSnap.exists) {
-      mapping = mappingSnap.data() as any;
+    if (originatorConversationId) {
       console.log(
-        "[M-PESA B2C CALLBACK] Found mpesaWithdrawals mapping doc:",
-        mapping,
-      );
-    } else {
-      console.warn(
-        "[M-PESA B2C CALLBACK] No mpesaWithdrawals mapping doc for OriginatorConversationID:",
+        "[M-PESA B2C CALLBACK] Querying withdrawals by originatorConversationId:",
         originatorConversationId,
       );
-
-      // Fallback: search the withdrawals collection group by originatorConversationId
-      const cgSnap = await adminDb
+      withdrawalSnap = await adminDb
         .collectionGroup("withdrawals")
         .where("originatorConversationId", "==", originatorConversationId)
         .limit(1)
         .get();
-
-      if (!cgSnap.empty) {
-        const docSnap = cgSnap.docs[0];
-        const ref = docSnap.ref;
-        const userId = ref.parent.parent?.id; // users/{userId}/withdrawals/{withdrawalId}
-        const withdrawalId = ref.id;
-
-        mapping = {
-          ...(docSnap.data() as any),
-          userId,
-          withdrawalId,
-        };
-
-        console.log(
-          "[M-PESA B2C CALLBACK] Fallback mapping via collectionGroup:",
-          {
-            userId,
-            withdrawalId,
-            originatorConversationId,
-          },
-        );
-      }
     }
 
-    if (!mapping || !mapping.userId || !mapping.withdrawalId) {
+    if ((!withdrawalSnap || withdrawalSnap.empty) && conversationId) {
+      console.log(
+        "[M-PESA B2C CALLBACK] No match by originatorConversationId; querying by conversationId:",
+        conversationId,
+      );
+      withdrawalSnap = await adminDb
+        .collectionGroup("withdrawals")
+        .where("conversationId", "==", conversationId)
+        .limit(1)
+        .get();
+    }
+
+    if (!withdrawalSnap || withdrawalSnap.empty) {
       console.warn(
-        "[M-PESA B2C CALLBACK] Could not resolve mapping to withdrawal document:",
-        mapping,
+        "[M-PESA B2C CALLBACK] No matching withdrawal found for IDs",
+        { originatorConversationId, conversationId },
       );
       return NextResponse.json({ ResultCode: 0, ResultDesc: "Accepted" });
     }
 
-    const { userId, withdrawalId } = mapping;
-    const withdrawalRef = adminDb.doc(
-      `users/${userId}/withdrawals/${withdrawalId}`,
-    );
+    const withdrawalDoc = withdrawalSnap.docs[0];
+    const withdrawalRef = withdrawalDoc.ref;
+    const withdrawalData = withdrawalDoc.data() as any;
+
+    // Parent of the withdrawals collection is users/{userId}
+    const userDocRef = withdrawalRef.parent.parent;
+    const userId = userDocRef?.id;
+
+    if (!userId) {
+      console.warn(
+        "[M-PESA B2C CALLBACK] Could not determine userId from withdrawal path:",
+        withdrawalRef.path,
+      );
+      return NextResponse.json({ ResultCode: 0, ResultDesc: "Accepted" });
+    }
 
     const status = resultCode === 0 ? "success" : "failed";
 
-    // ─────────────────────────────────────────────
-    // 2️⃣ Update withdrawal history document
-    // ─────────────────────────────────────────────
     await withdrawalRef.set(
       {
         status,
         mpesaResultCode: resultCode,
         mpesaResultDesc: resultDesc,
-        mpesaConversationId: conversationId || mapping.conversationId || null,
-        mpesaOriginatorConversationId: originatorConversationId,
-        mpesaAmount: amount,
+        mpesaConversationId: conversationId || withdrawalData.conversationId || null,
+        mpesaOriginatorConversationId:
+          originatorConversationId || withdrawalData.originatorConversationId || null,
+        mpesaAmount: amount ?? withdrawalData.amount ?? null,
         mpesaReceipt: receipt,
         mpesaReceiver: receiver,
         mpesaCompletedAt: completedAt,
@@ -180,37 +159,50 @@ export async function POST(req: NextRequest) {
       status,
     });
 
-    // ─────────────────────────────────────────────
-    // 3️⃣ On success, create walletTransactions debit
-    // ─────────────────────────────────────────────
-    if (status === "success") {
-      const finalAmount =
-        amount ??
-        (typeof mapping.amount === "number" ? mapping.amount : null) ??
-        0;
+    // 💰 Step 2: Only debit wallet on successful payout
+    if (resultCode === 0) {
+      const debitAmount = amount ?? withdrawalData.amount ?? 0;
 
-      const walletTxRef = adminDb
-        .collection("users")
-        .doc(userId)
-        .collection("walletTransactions")
-        .doc(); // auto-id
+      if (!debitAmount || debitAmount <= 0) {
+        console.warn(
+          "[M-PESA B2C CALLBACK] debitAmount is invalid, skipping wallet debit",
+          {
+            amount,
+            withdrawalAmount: withdrawalData.amount,
+          },
+        );
+      } else {
+        const walletTxRef = adminDb
+          .collection("users")
+          .doc(userId)
+          .collection("walletTransactions")
+          // deterministic id so repeated callbacks don't double-debit
+          .doc(`withdrawal_${withdrawalRef.id}`);
 
-      await walletTxRef.set({
-        amount: finalAmount,
-        type: "debit",
-        reason: "wallet_withdraw",
-        status: "completed",
-        relatedWithdrawalId: withdrawalId,
-        createdAt: Date.now(),
-      });
+        await walletTxRef.set(
+          {
+            amount: debitAmount,
+            type: "debit",
+            reason: "wallet_withdraw",
+            status: "completed",
+            bookingId: null,
+            createdAt: Date.now(),
+            b2cConversationId: conversationId || null,
+            b2cOriginatorConversationId: originatorConversationId || null,
+            mpesaReceipt: receipt || null,
+          },
+          { merge: true },
+        );
 
-      console.log("💸 [M-PESA B2C CALLBACK] Wallet debit created:", {
-        path: walletTxRef.path,
-        amount: finalAmount,
-      });
+        console.log("💸 [M-PESA B2C CALLBACK] Wallet debit recorded:", {
+          userId,
+          txPath: walletTxRef.path,
+          amount: debitAmount,
+        });
+      }
     } else {
       console.log(
-        "ℹ️ [M-PESA B2C CALLBACK] Withdrawal not successful; wallet balance unchanged.",
+        "⚠️ [M-PESA B2C CALLBACK] ResultCode not 0; marking withdrawal failed and leaving wallet balance unchanged",
       );
     }
 

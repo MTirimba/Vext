@@ -14,7 +14,6 @@ import {
   doc,
   getDoc,
   updateDoc,
-  setDoc,
 } from 'firebase/firestore';
 
 interface WithdrawModalProps {
@@ -179,7 +178,7 @@ export default function WithdrawModal({ available, onClose }: WithdrawModalProps
         return;
       }
 
-      // 2) Record a withdrawal entry for history and create mapping doc
+      // 2) Record a withdrawal entry for history
       try {
         const mpesaResp = data && (data.mpesaResponse ?? data);
 
@@ -206,7 +205,6 @@ export default function WithdrawModal({ available, onClose }: WithdrawModalProps
           createdAt: serverTimestamp(),
           channel: 'mpesa-b2c',
 
-          // 🔗 IDs to match in /api/mpesa/b2c/callback
           originatorConversationId,
           conversationId,
 
@@ -218,41 +216,7 @@ export default function WithdrawModal({ available, onClose }: WithdrawModalProps
           id: withdrawalDocRef.id,
         });
 
-        // 🔗 Create mapping doc for callback → actual withdrawal document
-        try {
-          if (originatorConversationId) {
-            await setDoc(
-              doc(db, 'mpesaWithdrawals', originatorConversationId),
-              {
-                userId: user.uid,
-                withdrawalId: withdrawalDocRef.id,
-                amount: amountNumber,
-                phoneNumber,
-                conversationId,
-                createdAt: serverTimestamp(),
-              },
-              { merge: true },
-            );
-
-            console.log(
-              '[WITHDRAW_MODAL] Mapping doc created in mpesaWithdrawals:',
-              {
-                originatorConversationId,
-                userId: user.uid,
-                withdrawalId: withdrawalDocRef.id,
-              },
-            );
-          } else {
-            console.warn(
-              '[WITHDRAW_MODAL] No OriginatorConversationID – mapping doc not created',
-            );
-          }
-        } catch (mapErr) {
-          console.error(
-            '[WITHDRAW_MODAL] Failed to create mpesaWithdrawals mapping doc:',
-            mapErr,
-          );
-        }
+        // ❌ NO mapping doc here anymore – handled purely server-side in callback
       } catch (e) {
         console.error('Failed to record withdrawal document:', e);
       }
