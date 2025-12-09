@@ -1,4 +1,4 @@
-// /workspaces/Vext/app/api/mpesa/init/route.ts
+// /app/api/mpesa/init/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
 
@@ -29,9 +29,19 @@ function redact(value: string | undefined) {
   return value.slice(0, 2) + "****" + value.slice(-2);
 }
 
+type InitBody = {
+  phoneNumber?: string;
+  amount?: number | string;
+  bookingId?: string;
+  walletDeposit?: boolean;
+  userId?: string;
+  accountReference?: string;
+  description?: string;
+};
+
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
+    const body = (await req.json()) as InitBody;
     console.log("📲 [M-PESA INIT] STK Push request body:", {
       ...body,
       phoneNumber: body?.phoneNumber ? "***redacted***" : undefined,
@@ -41,47 +51,36 @@ export async function POST(req: NextRequest) {
       phoneNumber,
       amount,
       bookingId,
-      accountReference,
-      description,
       walletDeposit,
       userId,
-    } = body as {
-      phoneNumber?: string;
-      amount?: number | string;
-      bookingId?: string;
-      accountReference?: string;
-      description?: string;
-      walletDeposit?: boolean;
-      userId?: string;
-    };
+      accountReference,
+      description,
+    } = body;
 
     const isWalletDeposit = !!walletDeposit;
 
-    // ✅ For both bookings and wallet deposits: phone + amount are required
-    if (!phoneNumber || !amount) {
-      console.warn("[M-PESA INIT] Missing phoneNumber or amount");
+    if (!phoneNumber || !amount || (!isWalletDeposit && !bookingId)) {
+      console.warn(
+        "[M-PESA INIT] Missing phoneNumber, amount or bookingId (for booking flow)"
+      );
       return NextResponse.json(
-        { error: "Missing phoneNumber or amount" },
-        { status: 400 },
+        { error: "Missing phoneNumber, amount or bookingId" },
+        { status: 400 }
       );
     }
 
-    // ✅ Only require bookingId if this is NOT a wallet deposit
-    if (!isWalletDeposit && !bookingId) {
-      console.warn("[M-PESA INIT] Missing bookingId for booking payment");
+    if (isWalletDeposit && !userId) {
+      console.warn("[M-PESA INIT] Wallet deposit but no userId provided");
       return NextResponse.json(
-        { error: "Missing bookingId for booking payment" },
-        { status: 400 },
+        { error: "Missing userId for wallet deposit" },
+        { status: 400 }
       );
     }
 
     const parsedAmount = Number(amount);
     if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
       console.warn("[M-PESA INIT] Invalid amount:", amount);
-      return NextResponse.json(
-        { error: "Invalid amount" },
-        { status: 400 },
-      );
+      return NextResponse.json({ error: "Invalid amount" }, { status: 400 });
     }
 
     const sanitizedPhone = sanitizePhone(phoneNumber);
@@ -125,13 +124,13 @@ export async function POST(req: NextRequest) {
           error:
             "M-Pesa configuration error. Please contact support if this persists.",
         },
-        { status: 500 },
+        { status: 500 }
       );
     }
 
     // 1️⃣ Generate OAuth Token
     const auth = Buffer.from(`${consumerKey}:${consumerSecret}`).toString(
-      "base64",
+      "base64"
     );
 
     const tokenRes = await fetch(
@@ -139,7 +138,7 @@ export async function POST(req: NextRequest) {
       {
         headers: { Authorization: `Basic ${auth}` },
         cache: "no-store",
-      },
+      }
     );
 
     if (!tokenRes.ok) {
@@ -153,7 +152,7 @@ export async function POST(req: NextRequest) {
           error:
             "Failed to contact M-Pesa gateway (token). Please try again later.",
         },
-        { status: 502 },
+        { status: 502 }
       );
     }
 
@@ -164,11 +163,11 @@ export async function POST(req: NextRequest) {
     if (!accessToken) {
       console.error(
         "[M-PESA INIT] No access_token in OAuth response:",
-        tokenData,
+        tokenData
       );
       return NextResponse.json(
         { error: "Failed to obtain access token from M-Pesa" },
-        { status: 500 },
+        { status: 500 }
       );
     }
 
@@ -178,25 +177,20 @@ export async function POST(req: NextRequest) {
       .replace(/[-T:\.Z]/g, "")
       .slice(0, 14);
     const password = Buffer.from(shortcode + passkey + timestamp).toString(
-      "base64",
+      "base64"
     );
 
-    const fallbackWalletRef =
-      `WALLET-${(userId || "").slice(-6).toUpperCase() || "TOPUP"}-${Date.now()
-        .toString(36)
-        .toUpperCase()}`;
-
-    const finalAccountRef =
+    const effectiveAccountRef =
       accountReference ||
-      (isWalletDeposit ? fallbackWalletRef : bookingId || "BOOKING");
+      (isWalletDeposit
+        ? `WALLET-${userId || "user"}`
+        : bookingId || "VEXTUP-BOOKING");
 
-    const finalDescription =
+    const effectiveDesc =
       description ||
       (isWalletDeposit
-        ? "Wallet deposit"
-        : bookingId
-        ? `Booking ${bookingId}`
-        : "Booking payment");
+        ? `Wallet deposit for ${userId || "user"}`
+        : `Booking ${bookingId}`);
 
     const stkPayload = {
       BusinessShortCode: shortcode,
@@ -208,8 +202,8 @@ export async function POST(req: NextRequest) {
       PartyB: tillNumber, // Till number
       PhoneNumber: sanitizedPhone,
       CallBackURL: callbackUrl,
-      AccountReference: finalAccountRef,
-      TransactionDesc: finalDescription,
+      AccountReference: effectiveAccountRef,
+      TransactionDesc: effectiveDesc,
     };
 
     console.log("📦 [M-PESA INIT] STK Payload:", {
@@ -228,7 +222,7 @@ export async function POST(req: NextRequest) {
           "Content-Type": "application/json",
         },
         body: JSON.stringify(stkPayload),
-      },
+      }
     );
 
     const rawText = await stkRes.text();
@@ -252,63 +246,68 @@ export async function POST(req: NextRequest) {
             "Failed to initiate M-Pesa payment. Please try again.",
           details: stkData,
         },
-        { status: 502 },
+        { status: 502 }
       );
     }
 
-    // 4️⃣ Store CheckoutRequestID mapping for callback
+    // 4️⃣ Store mapping for callback:
+    //    - booking flow: store on booking doc
+    //    - wallet flow: store in walletTopups collection
     try {
       if (stkData.CheckoutRequestID) {
-        if (isWalletDeposit) {
-          // Map STK -> wallet topup intent
+        const checkoutId = stkData.CheckoutRequestID as string;
+
+        if (isWalletDeposit && userId) {
           await adminDb
             .collection("walletTopups")
-            .doc(stkData.CheckoutRequestID)
+            .doc(checkoutId)
             .set(
               {
-                userId: userId || null,
+                userId,
                 amount: parsedAmount,
                 phoneNumber: sanitizedPhone,
+                status: "pending",
                 createdAt: Date.now(),
-                status: "PENDING",
-                type: "wallet_deposit",
+                mode: "mpesa",
               },
-              { merge: true },
+              { merge: true }
             );
           console.log(
-            "🧾 [M-PESA INIT] Stored wallet topup intent",
-            stkData.CheckoutRequestID,
+            "🧾 [M-PESA INIT] Stored walletTopup mapping for CheckoutRequestID",
+            checkoutId,
+            "user:",
+            userId
           );
-        } else if (bookingId) {
-          // Existing behaviour for bookings
+        } else if (!isWalletDeposit && bookingId) {
           await adminDb.collection("bookings").doc(bookingId).set(
             {
-              mpesaCheckoutRequestId: stkData.CheckoutRequestID,
+              mpesaCheckoutRequestId: checkoutId,
               mpesaMerchantRequestId: stkData.MerchantRequestID || null,
               mpesaRequestedAt: Date.now(),
             },
-            { merge: true },
+            { merge: true }
           );
           console.log(
             "🧾 [M-PESA INIT] Stored mpesaCheckoutRequestId on booking",
-            bookingId,
+            bookingId
           );
         } else {
           console.warn(
-            "⚠️ [M-PESA INIT] Got CheckoutRequestID but neither walletDeposit nor bookingId was provided",
+            "⚠️ [M-PESA INIT] STK success but no mapping saved (no userId / bookingId)",
+            { isWalletDeposit, userId, bookingId }
           );
         }
       } else {
         console.warn(
-          "⚠️ [M-PESA INIT] No CheckoutRequestID returned in STK response",
+          "⚠️ [M-PESA INIT] No CheckoutRequestID returned from M-Pesa"
         );
       }
     } catch (e) {
       console.error(
-        "❌ [M-PESA INIT] Failed to store mpesa IDs / topup intent:",
-        e,
+        "❌ [M-PESA INIT] Failed to store mpesa mapping:",
+        (e as any)?.message || e
       );
-      // Do not fail the client just because metadata storage failed
+      // Do not fail client; callback may still succeed.
     }
 
     return NextResponse.json(stkData, { status: 200 });
@@ -320,7 +319,7 @@ export async function POST(req: NextRequest) {
           error?.message ||
           "Unexpected error while starting M-Pesa payment. Please try again.",
       },
-      { status: 500 },
+      { status: 500 }
     );
   }
 }

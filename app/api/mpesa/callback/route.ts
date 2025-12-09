@@ -13,30 +13,28 @@ export async function POST(req: NextRequest) {
   } catch (e) {
     console.error(
       "❌ [M-PESA STK CALLBACK] Failed to parse JSON body:",
-      (e as any)?.message || e,
+      (e as any)?.message || e
     );
   }
 
   console.log(
     "📥 [M-PESA STK CALLBACK] Raw body:",
-    JSON.stringify(body, null, 2),
+    JSON.stringify(body, null, 2)
   );
 
   try {
     const callback = body?.Body?.stkCallback;
     if (!callback) {
       console.warn(
-        "⚠️ [M-PESA STK CALLBACK] No Body.stkCallback in payload, echoing OK",
+        "⚠️ [M-PESA STK CALLBACK] No Body.stkCallback in payload, echoing OK"
       );
-      // Always ACK so Safaricom stops retrying
       return NextResponse.json({ ResultCode: 0, ResultDesc: "Accepted" });
     }
 
-    const CheckoutRequestID = callback?.CheckoutRequestID;
+    const CheckoutRequestID = callback?.CheckoutRequestID as string | undefined;
     const ResultCodeRaw = callback?.ResultCode;
     const ResultDesc = callback?.ResultDesc;
 
-    // Cast ResultCode to number to be safe (Daraja can send 0 or "0")
     const ResultCode = Number(ResultCodeRaw);
 
     console.log(
@@ -45,7 +43,7 @@ export async function POST(req: NextRequest) {
       "ResultCode:",
       ResultCode,
       "ResultDesc:",
-      ResultDesc,
+      ResultDesc
     );
 
     let amount: number | null = null;
@@ -68,88 +66,170 @@ export async function POST(req: NextRequest) {
       txDate,
     });
 
-    // 🔎 Find booking by mpesaCheckoutRequestId
-    let bookingId: string | null = null;
-    if (CheckoutRequestID) {
-      const snap = await adminDb
-        .collection("bookings")
-        .where("mpesaCheckoutRequestId", "==", CheckoutRequestID)
-        .limit(1)
-        .get();
-
-      if (!snap.empty) {
-        bookingId = snap.docs[0].id;
-        console.log(
-          "✅ [M-PESA STK CALLBACK] Matched booking:",
-          bookingId,
-          "for CheckoutRequestID:",
-          CheckoutRequestID,
-        );
-      } else {
-        console.warn(
-          "⚠️ [M-PESA STK CALLBACK] No booking found for CheckoutRequestID:",
-          CheckoutRequestID,
-        );
-      }
-    } else {
+    if (!CheckoutRequestID) {
       console.warn("⚠️ [M-PESA STK CALLBACK] Missing CheckoutRequestID");
-    }
-
-    // If we can't match a booking, we still ACK to Safaricom to stop retries.
-    if (!bookingId) {
       return NextResponse.json({ ResultCode: 0, ResultDesc: "Accepted" });
     }
 
-    const bookingRef = adminDb.collection("bookings").doc(bookingId);
+    // 🔎 Try to match booking AND walletTopup in parallel
+    const [bookingSnap, walletTopupSnap] = await Promise.all([
+      adminDb
+        .collection("bookings")
+        .where("mpesaCheckoutRequestId", "==", CheckoutRequestID)
+        .limit(1)
+        .get(),
+      adminDb.collection("walletTopups").doc(CheckoutRequestID).get(),
+    ]);
 
-    if (ResultCode === 0) {
+    let bookingId: string | null = null;
+    if (!bookingSnap.empty) {
+      bookingId = bookingSnap.docs[0].id;
       console.log(
-        "✅ [M-PESA STK CALLBACK] Payment success, marking booking confirmed",
-      );
-      await bookingRef.set(
-        {
-          status: "confirmed",
-          paymentStatus: "paid",
-          paymentMethod: "mpesa",
-          paymentRef: receipt || CheckoutRequestID || null,
-          mpesaAmount: amount,
-          mpesaPhone: phone,
-          mpesaTransactionDate: txDate,
-          mpesaResultCode: ResultCode,
-          mpesaResultDesc: ResultDesc,
-          mpesaCallbackAt: Date.now(),
-        },
-        { merge: true },
+        "✅ [M-PESA STK CALLBACK] Matched booking:",
+        bookingId,
+        "for CheckoutRequestID:",
+        CheckoutRequestID
       );
     } else {
       console.log(
-        "❌ [M-PESA STK CALLBACK] Payment failed/cancelled, marking booking payment_failed",
-        ResultCode,
-        ResultDesc,
+        "ℹ️ [M-PESA STK CALLBACK] No booking found for CheckoutRequestID:",
+        CheckoutRequestID
       );
-      await bookingRef.set(
-        {
-          status: "payment_failed",
-          paymentStatus: "failed",
-          paymentMethod: "mpesa",
-          mpesaAmount: amount,
-          mpesaPhone: phone,
-          mpesaTransactionDate: txDate,
-          mpesaResultCode: ResultCode,
-          mpesaResultDesc: ResultDesc,
-          mpesaCallbackAt: Date.now(),
-        },
-        { merge: true },
+    }
+
+    let walletUserId: string | null = null;
+    let walletRequestedAmount: number | null = null;
+
+    if (walletTopupSnap.exists) {
+      const d = walletTopupSnap.data() as any;
+      walletUserId = (d && d.userId) || null;
+      walletRequestedAmount =
+        typeof d?.amount === "number" ? d.amount : Number(d?.amount) || null;
+
+      console.log(
+        "✅ [M-PESA STK CALLBACK] Matched walletTopup for CheckoutRequestID:",
+        CheckoutRequestID,
+        "user:",
+        walletUserId
       );
+    } else {
+      console.log(
+        "ℹ️ [M-PESA STK CALLBACK] No walletTopup mapping for CheckoutRequestID:",
+        CheckoutRequestID
+      );
+    }
+
+    // If neither booking nor wallet flow matched, just ACK so M-Pesa stops retrying
+    if (!bookingId && !walletUserId) {
+      console.warn(
+        "⚠️ [M-PESA STK CALLBACK] No booking or walletTopup found for CheckoutRequestID:",
+        CheckoutRequestID
+      );
+      return NextResponse.json({ ResultCode: 0, ResultDesc: "Accepted" });
+    }
+
+    // 1️⃣ Booking flow
+    if (bookingId) {
+      const bookingRef = adminDb.collection("bookings").doc(bookingId);
+
+      if (ResultCode === 0) {
+        console.log(
+          "✅ [M-PESA STK CALLBACK] Payment success, marking booking confirmed"
+        );
+        await bookingRef.set(
+          {
+            status: "confirmed",
+            paymentStatus: "paid",
+            paymentMethod: "mpesa",
+            paymentRef: receipt || CheckoutRequestID || null,
+            mpesaAmount: amount,
+            mpesaPhone: phone,
+            mpesaTransactionDate: txDate,
+            mpesaResultCode: ResultCode,
+            mpesaResultDesc: ResultDesc,
+            mpesaCallbackAt: Date.now(),
+          },
+          { merge: true }
+        );
+      } else {
+        console.log(
+          "❌ [M-PESA STK CALLBACK] Payment failed/cancelled, marking booking payment_failed",
+          ResultCode,
+          ResultDesc
+        );
+        await bookingRef.set(
+          {
+            status: "payment_failed",
+            paymentStatus: "failed",
+            paymentMethod: "mpesa",
+            mpesaAmount: amount,
+            mpesaPhone: phone,
+            mpesaTransactionDate: txDate,
+            mpesaResultCode: ResultCode,
+            mpesaResultDesc: ResultDesc,
+            mpesaCallbackAt: Date.now(),
+          },
+          { merge: true }
+        );
+      }
+    }
+
+    // 2️⃣ Wallet deposit flow
+    if (walletUserId) {
+      const statusLabel = ResultCode === 0 ? "completed" : "failed";
+      const userId = walletUserId;
+      const txAmount = amount ?? walletRequestedAmount ?? 0;
+
+      console.log(
+        "🏦 [M-PESA STK CALLBACK] Handling wallet deposit for user:",
+        userId,
+        "status:",
+        statusLabel
+      );
+
+      // Create wallet transaction (this is what the client listens to)
+      const walletTxRef = adminDb
+        .collection("users")
+        .doc(userId)
+        .collection("walletTransactions")
+        .doc();
+
+      await walletTxRef.set({
+        amount: txAmount,
+        type: "credit",
+        reason: "wallet_deposit",
+        status: statusLabel,
+        mpesaReceipt: receipt || CheckoutRequestID || null,
+        mpesaPhone: phone,
+        mpesaTransactionDate: txDate,
+        mpesaResultCode: ResultCode,
+        mpesaResultDesc: ResultDesc,
+        createdAt: Date.now(),
+      });
+
+      // Update walletTopups helper doc
+      await adminDb
+        .collection("walletTopups")
+        .doc(CheckoutRequestID)
+        .set(
+          {
+            status: statusLabel,
+            walletTxId: walletTxRef.id,
+            mpesaAmount: amount,
+            mpesaPhone: phone,
+            mpesaTransactionDate: txDate,
+            mpesaResultCode: ResultCode,
+            mpesaResultDesc: ResultDesc,
+            mpesaCallbackAt: Date.now(),
+          },
+          { merge: true }
+        );
     }
 
     // Always ACK so Safaricom is happy
     return NextResponse.json({ ResultCode: 0, ResultDesc: "Accepted" });
   } catch (err: any) {
-    console.error(
-      "❌ [M-PESA STK CALLBACK ERROR]:",
-      err?.message || err,
-    );
+    console.error("❌ [M-PESA STK CALLBACK ERROR]:", err?.message || err);
     // Still ACK so Safaricom doesn't keep retrying forever
     return NextResponse.json({
       ResultCode: 0,
