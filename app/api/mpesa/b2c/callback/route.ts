@@ -81,40 +81,83 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ResultCode: 0, ResultDesc: "Accepted" });
     }
 
-    // 🔎 Step 1: look up mapping in top-level mpesaWithdrawals collection
+    // ─────────────────────────────────────────────
+    // 1️⃣ Find mapping → withdrawal document
+    // ─────────────────────────────────────────────
+    let mapping: {
+      userId?: string;
+      withdrawalId?: string;
+      conversationId?: string;
+      amount?: number;
+      phoneNumber?: string;
+    } | null = null;
+
+    // Prefer the inexpensive direct mapping document
     const mappingSnap = await adminDb
       .collection("mpesaWithdrawals")
       .doc(originatorConversationId)
       .get();
 
-    if (!mappingSnap.exists) {
+    if (mappingSnap.exists) {
+      mapping = mappingSnap.data() as any;
+      console.log(
+        "[M-PESA B2C CALLBACK] Found mpesaWithdrawals mapping doc:",
+        mapping,
+      );
+    } else {
       console.warn(
-        "[M-PESA B2C CALLBACK] No mpesaWithdrawals mapping doc found for OriginatorConversationID:",
+        "[M-PESA B2C CALLBACK] No mpesaWithdrawals mapping doc for OriginatorConversationID:",
         originatorConversationId,
       );
-      return NextResponse.json({ ResultCode: 0, ResultDesc: "Accepted" });
+
+      // Fallback: search the withdrawals collection group by originatorConversationId
+      const cgSnap = await adminDb
+        .collectionGroup("withdrawals")
+        .where("originatorConversationId", "==", originatorConversationId)
+        .limit(1)
+        .get();
+
+      if (!cgSnap.empty) {
+        const docSnap = cgSnap.docs[0];
+        const ref = docSnap.ref;
+        const userId = ref.parent.parent?.id; // users/{userId}/withdrawals/{withdrawalId}
+        const withdrawalId = ref.id;
+
+        mapping = {
+          ...(docSnap.data() as any),
+          userId,
+          withdrawalId,
+        };
+
+        console.log(
+          "[M-PESA B2C CALLBACK] Fallback mapping via collectionGroup:",
+          {
+            userId,
+            withdrawalId,
+            originatorConversationId,
+          },
+        );
+      }
     }
 
-    const mapping = mappingSnap.data() as {
-      userId?: string;
-      withdrawalId?: string;
-      conversationId?: string;
-    };
-
-    if (!mapping.userId || !mapping.withdrawalId) {
+    if (!mapping || !mapping.userId || !mapping.withdrawalId) {
       console.warn(
-        "[M-PESA B2C CALLBACK] Mapping doc missing userId/withdrawalId:",
+        "[M-PESA B2C CALLBACK] Could not resolve mapping to withdrawal document:",
         mapping,
       );
       return NextResponse.json({ ResultCode: 0, ResultDesc: "Accepted" });
     }
 
+    const { userId, withdrawalId } = mapping;
     const withdrawalRef = adminDb.doc(
-      `users/${mapping.userId}/withdrawals/${mapping.withdrawalId}`,
+      `users/${userId}/withdrawals/${withdrawalId}`,
     );
 
     const status = resultCode === 0 ? "success" : "failed";
 
+    // ─────────────────────────────────────────────
+    // 2️⃣ Update withdrawal history document
+    // ─────────────────────────────────────────────
     await withdrawalRef.set(
       {
         status,
@@ -132,13 +175,44 @@ export async function POST(req: NextRequest) {
       { merge: true },
     );
 
-    console.log(
-      "✅ [M-PESA B2C CALLBACK] Withdrawal doc updated:",
-      {
-        path: withdrawalRef.path,
-        status,
-      },
-    );
+    console.log("✅ [M-PESA B2C CALLBACK] Withdrawal doc updated:", {
+      path: withdrawalRef.path,
+      status,
+    });
+
+    // ─────────────────────────────────────────────
+    // 3️⃣ On success, create walletTransactions debit
+    // ─────────────────────────────────────────────
+    if (status === "success") {
+      const finalAmount =
+        amount ??
+        (typeof mapping.amount === "number" ? mapping.amount : null) ??
+        0;
+
+      const walletTxRef = adminDb
+        .collection("users")
+        .doc(userId)
+        .collection("walletTransactions")
+        .doc(); // auto-id
+
+      await walletTxRef.set({
+        amount: finalAmount,
+        type: "debit",
+        reason: "wallet_withdraw",
+        status: "completed",
+        relatedWithdrawalId: withdrawalId,
+        createdAt: Date.now(),
+      });
+
+      console.log("💸 [M-PESA B2C CALLBACK] Wallet debit created:", {
+        path: walletTxRef.path,
+        amount: finalAmount,
+      });
+    } else {
+      console.log(
+        "ℹ️ [M-PESA B2C CALLBACK] Withdrawal not successful; wallet balance unchanged.",
+      );
+    }
 
     // ACK to Safaricom so it stops retrying
     return NextResponse.json({ ResultCode: 0, ResultDesc: "Accepted" });
