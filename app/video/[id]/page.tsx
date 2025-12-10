@@ -1,152 +1,150 @@
 // app/video/[id]/page.tsx
-import type { Metadata } from "next";
+"use client";
 
-type PageProps = {
-  params: { id: string };
+import { useEffect, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
+import { db } from "@/lib/firebase";
+import { doc, getDoc } from "firebase/firestore";
+
+type MediaItem = {
+  url: string;
+  type: "image" | "video";
 };
 
-type VideoDoc = {
+interface VideoDoc {
   id: string;
-  url: string;
+  userId?: string;
+  url?: string;        // legacy single URL
+  coverUrl?: string;   // primary thumbnail
+  media?: MediaItem[]; // carousel items
   title?: string;
   description?: string;
-  thumbnailUrl?: string;
-};
-
-/* ---------- Firestore REST helper (server-side) ---------- */
-
-const FIREBASE_PROJECT_ID = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
-const FIREBASE_API_KEY = process.env.NEXT_PUBLIC_FIREBASE_API_KEY;
-
-// Parse Firestore REST "fields" object into a simple VideoDoc
-function parseVideoDoc(id: string, data: any): VideoDoc | null {
-  const f = data?.fields;
-  if (!f) return null;
-
-  const getString = (field: string): string | undefined =>
-    f[field]?.stringValue ?? undefined;
-
-  return {
-    id,
-    url: getString("url") || "",
-    title: getString("title"),
-    description: getString("description"),
-    thumbnailUrl:
-      getString("thumbnailUrl") ||
-      getString("coverUrl") || // backwards compat
-      getString("url") || undefined,
-  };
+  serviceCost?: number;
+  timeTaken?: { hours?: number; minutes?: number };
 }
 
-async function fetchVideoById(id: string): Promise<VideoDoc | null> {
-  if (!FIREBASE_PROJECT_ID || !FIREBASE_API_KEY) {
-    console.error(
-      "Missing NEXT_PUBLIC_FIREBASE_PROJECT_ID or NEXT_PUBLIC_FIREBASE_API_KEY env vars."
-    );
-    return null;
+/**
+ * Choose the primary media to display:
+ * 1) First item in media[]
+ * 2) coverUrl
+ * 3) url
+ */
+function getPrimaryMedia(video: VideoDoc): MediaItem | null {
+  if (video.media && video.media.length > 0) {
+    return video.media[0];
   }
 
-  const res = await fetch(
-    `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/videos/${encodeURIComponent(
-      id
-    )}?key=${FIREBASE_API_KEY}`,
-    {
-      // don’t cache so updates show up in previews reasonably quickly
-      cache: "no-store",
-    }
+  const src = video.coverUrl || video.url;
+  if (!src) return null;
+
+  const isImage = /\.(png|jpe?g|gif|webp|avif|bmp)$/i.test(
+    src.split("?")[0] || ""
   );
 
-  if (!res.ok) {
-    console.error("Failed to fetch video doc:", res.status, await res.text());
-    return null;
-  }
-
-  const json = await res.json();
-  return parseVideoDoc(id, json);
-}
-
-/* ---------- Open Graph / Twitter metadata ---------- */
-
-export async function generateMetadata(
-  { params }: PageProps
-): Promise<Metadata> {
-  const video = await fetchVideoById(params.id);
-
-  if (!video) {
-    return {
-      title: "Service not found | VextUp",
-      description: "This service could not be found on VextUp.",
-    };
-  }
-
-  const baseUrl = "https://vextup.com";
-  const url = `${baseUrl}/video/${params.id}`;
-
-  const title = video.title || "Service on VextUp";
-  const description =
-    video.description ||
-    "Book this service on VextUp – see details, pricing and reserve a slot instantly.";
-
-  const ogImage = video.thumbnailUrl || "/og-default.png";
-
   return {
-    title: `${title} | VextUp`,
-    description,
-    openGraph: {
-      type: "website",
-      url,
-      title: `${title} | VextUp`,
-      description,
-      images: [
-        {
-          url: ogImage,
-          width: 1200,
-          height: 630,
-        },
-      ],
-    },
-    twitter: {
-      card: "summary_large_image",
-      title: `${title} | VextUp`,
-      description,
-      images: [ogImage],
-    },
+    url: src,
+    type: isImage ? "image" : "video",
   };
 }
 
-/* ---------- Page UI (server component) ---------- */
+export default function VideoPage() {
+  const params = useParams();
+  const router = useRouter();
 
-export default async function VideoPage({ params }: PageProps) {
-  const video = await fetchVideoById(params.id);
+  // params.id can be string | string[] | undefined depending on Next internals
+  const id =
+    typeof params?.id === "string"
+      ? params.id
+      : Array.isArray(params?.id)
+      ? params.id[0]
+      : undefined;
 
-  if (!video || !video.url) {
+  const [video, setVideo] = useState<VideoDoc | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!id) {
+      setLoading(false);
+      return;
+    }
+
+    const fetchVideo = async () => {
+      try {
+        const ref = doc(db, "videos", id);
+        const snap = await getDoc(ref);
+        if (snap.exists()) {
+          const data = snap.data() as any;
+          setVideo({ id: snap.id, ...data });
+        } else {
+          setVideo(null);
+        }
+      } catch (err) {
+        console.error("Error fetching video doc:", err);
+        setVideo(null);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchVideo();
+  }, [id]);
+
+  if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-black text-white">
-        <p>❌ Video not found.</p>
+        <p>Loading video…</p>
       </div>
     );
   }
 
+  if (!video || !id) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-black text-white">
+        <p className="mb-4">❌ Video not found.</p>
+        <button
+          type="button"
+          onClick={() => router.push("/")}
+          className="px-4 py-2 rounded bg-white text-black text-sm"
+        >
+          Go home
+        </button>
+      </div>
+    );
+  }
+
+  const primary = getPrimaryMedia(video);
+
   return (
     <div className="min-h-screen bg-black flex flex-col items-center justify-center p-4">
-      <video
-        src={video.url}
-        controls
-        playsInline
-        className="w-full max-w-2xl rounded-lg shadow-xl bg-black"
-      />
-      {(video.title || video.description) && (
-        <div className="mt-4 text-center max-w-2xl">
-          {video.title && (
-            <h1 className="text-xl font-semibold text-white mb-1">
-              {video.title}
-            </h1>
-          )}
-          {video.description && (
-            <p className="text-sm text-gray-300">{video.description}</p>
-          )}
-        </div>
-      )}
+      <div className="w-full max-w-2xl">
+        {primary?.type === "image" ? (
+          <img
+            src={primary.url}
+            alt={video.title || "Upload"}
+            className="w-full max-h-[70vh] object-contain rounded-lg bg-black"
+          />
+        ) : (
+          <video
+            src={primary?.url}
+            controls
+            autoPlay
+            playsInline
+            className="w-full max-h-[70vh] object-contain rounded-lg bg-black"
+          />
+        )}
+
+        {video.title && (
+          <h1 className="mt-3 text-lg font-semibold text-white">
+            {video.title}
+          </h1>
+        )}
+
+        {video.description && (
+          <p className="mt-1 text-sm text-gray-300 whitespace-pre-line">
+            {video.description}
+          </p>
+        )}
+      </div>
     </div>
   );
 }
