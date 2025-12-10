@@ -8,15 +8,17 @@ type ShareSearchParams = {
   image?: string;
 };
 
-type SearchParamsInput = ShareSearchParams | Promise<ShareSearchParams> | undefined;
-
-// Helper to normalise possible Promise searchParams
-async function resolveSearchParams(input: SearchParamsInput): Promise<ShareSearchParams> {
+// Helper to normalise possible Promise searchParams (Next 15 sometimes
+// passes a Promise here in the generated PageProps)
+async function resolveSearchParams(
+  input: ShareSearchParams | Promise<ShareSearchParams> | undefined
+): Promise<ShareSearchParams> {
   if (!input) return {};
+  // If it's Promise-like, await it
   if (typeof (input as any).then === "function") {
-    // It's a Promise-like
     try {
-      return ((await input) || {}) as ShareSearchParams;
+      const resolved = await (input as Promise<ShareSearchParams>);
+      return resolved || {};
     } catch {
       return {};
     }
@@ -25,10 +27,11 @@ async function resolveSearchParams(input: SearchParamsInput): Promise<ShareSearc
 }
 
 // Dynamic metadata so WhatsApp / FB / X etc get a proper OG preview
-export async function generateMetadata(
-  props: { searchParams?: SearchParamsInput }
-): Promise<Metadata> {
-  const searchParams = await resolveSearchParams(props.searchParams);
+export async function generateMetadata(props: any): Promise<Metadata> {
+  const searchParams = await resolveSearchParams(
+    (props as any)?.searchParams as any
+  );
+
   const { id, title, desc, image } = searchParams;
 
   const baseUrl = "https://vextup.com";
@@ -70,12 +73,11 @@ export async function generateMetadata(
   };
 }
 
-export default async function Page({
-  searchParams,
-}: {
-  searchParams?: SearchParamsInput;
-}) {
-  const { id, title, desc, image } = await resolveSearchParams(searchParams);
+export default async function Page(props: any) {
+  const { searchParams } = props || {};
+  const { id, title, desc, image } = await resolveSearchParams(
+    searchParams as any
+  );
 
   const prettyTitle = title || "Service on VextUp";
   const prettyDesc =
