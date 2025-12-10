@@ -39,7 +39,7 @@ import {
   FaTwitter,
   FaEnvelope,
   FaInstagram,
-  FaUser, // 👈 NEW: generic user icon for top-right menu button
+  FaUser, // 👈 generic user icon for top-right menu button
 } from 'react-icons/fa';
 import { SiTiktok } from 'react-icons/si';
 import { useRouter } from 'next/navigation';
@@ -1138,7 +1138,7 @@ export default function VideoFeed() {
           <FaSlidersH />
         </button>
 
-        {/* Avatar / menu with attention dot – now a plain user icon */}
+        {/* Avatar / menu with attention dot – plain user icon */}
         <div className="relative">
           <button
             onClick={() => setDropdownOpen(!dropdownOpen)}
@@ -1189,7 +1189,7 @@ export default function VideoFeed() {
                     )}
                   </button>
 
-                  {/* Messages entry (below notifications) */}
+                  {/* Messages entry */}
                   <button
                     onClick={() => {
                       router.push('/messages');
@@ -1335,7 +1335,7 @@ export default function VideoFeed() {
         </div>
       )}
 
-      {/* Filters dropdown (anchored, not full-screen) */}
+      {/* Filters dropdown */}
       <ServiceFiltersDropdown
         open={filtersOpen}
         value={filters}
@@ -1615,7 +1615,7 @@ export default function VideoFeed() {
                 </>
               )}
 
-              {/* Creator pill – with safe top inset */}
+              {/* Creator pill */}
               <div
                 onClick={() => router.push(creatorUrl)}
                 className="absolute left-3 bg-black/70 px-1 py-0.5 rounded-md cursor-pointer hover:bg-black/90 transition text-xs font-semibold text-white z-50 flex items-center gap-2"
@@ -1623,7 +1623,7 @@ export default function VideoFeed() {
                   top: 'calc(env(safe-area-inset-top, 0px) + 0.75rem)',
                 }}
               >
-                {/* Business avatar on feed (business profile photo) */}
+                {/* Business avatar on feed */}
                 {up.businessProfilePhoto ? (
                   <img
                     src={up.businessProfilePhoto}
@@ -1703,7 +1703,7 @@ export default function VideoFeed() {
                 </div>
               )}
 
-              {/* Text + Price – also lifted above nav bar */}
+              {/* Text + Price */}
               {(v.title || v.description || displayedPrice !== null) && (
                 <div
                   className="absolute left-3 max-w-[60%] overflow-hidden text-ellipsis z-50"
@@ -1788,7 +1788,8 @@ export default function VideoFeed() {
 
 /* -------------------------------------------------------
  * Post Share Modal – YouTube-style with more networks
- * Shares a specific video/image + link + curated message
+ * Now uses a dedicated /s share URL that carries
+ * title/description/image in the query for OG previews.
  * ----------------------------------------------------- */
 
 function PostShareModal({
@@ -1800,10 +1801,18 @@ function PostShareModal({
   creatorProfile: UserProfile | null;
   onClose: () => void;
 }) {
-  const url =
-    typeof window !== 'undefined'
-      ? `${window.location.origin}/video/${video.id}`
-      : '';
+  // Simple preview: first media item (used for both UI and OG)
+  const preview: MediaItem | null = (() => {
+    if (video.media && video.media.length > 0) return video.media[0];
+    if (video.url) {
+      const base = video.url.split('?')[0].toLowerCase();
+      const isImg =
+        /\.(png|jpe?g|gif|webp|avif|bmp)$/.test(base) ||
+        base.startsWith('data:image');
+      return { url: video.url, type: isImg ? 'image' : 'video' };
+    }
+    return null;
+  })();
 
   const creatorName =
     creatorProfile?.businessName ||
@@ -1812,7 +1821,23 @@ function PostShareModal({
     creatorProfile?.businessUsername ||
     'this provider';
 
-  const shareText = `Book this service on VextUp from ${creatorName} – see details, pricing and reserve a slot instantly here: ${url}`;
+  // Base site origin (works on client + respects NEXT_PUBLIC_SITE_URL on server)
+  const origin =
+    typeof window !== 'undefined'
+      ? window.location.origin
+      : process.env.NEXT_PUBLIC_SITE_URL || 'https://vextup.com';
+
+  // Build share URL that encodes the info we want to surface in OG tags.
+  const params = new URLSearchParams();
+  params.set('id', video.id);
+  if (video.title) params.set('title', video.title);
+  if (video.description) params.set('desc', video.description);
+  if (preview?.url) params.set('image', preview.url);
+
+  // This /s route is where we attach OpenGraph/Twitter metadata.
+  const shareUrl = `${origin}/s?${params.toString()}`;
+
+  const shareText = `Book this service on VextUp from ${creatorName} – see details, pricing and reserve a slot instantly here: ${shareUrl}`;
 
   const copyTextAndNotify = async (message?: string) => {
     try {
@@ -1826,7 +1851,7 @@ function PostShareModal({
 
   const copyLinkOnly = async () => {
     try {
-      await navigator.clipboard.writeText(url);
+      await navigator.clipboard.writeText(shareUrl);
       alert('Post link copied to clipboard!');
     } catch (err) {
       console.error('copy failed', err);
@@ -1834,8 +1859,8 @@ function PostShareModal({
     }
   };
 
-  const openWindow = (shareUrl: string) => {
-    window.open(shareUrl, '_blank', 'noopener,noreferrer');
+  const openWindow = (url: string) => {
+    window.open(url, '_blank', 'noopener,noreferrer');
   };
 
   const handleWhatsapp = () => {
@@ -1845,7 +1870,7 @@ function PostShareModal({
   const handleFacebook = () => {
     openWindow(
       `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(
-        url,
+        shareUrl,
       )}&quote=${encodeURIComponent(shareText)}`,
     );
   };
@@ -1874,19 +1899,6 @@ function PostShareModal({
     await copyTextAndNotify();
     openWindow('https://www.tiktok.com/');
   };
-
-  // Simple preview: first media item
-  const preview: MediaItem | null = (() => {
-    if (video.media && video.media.length > 0) return video.media[0];
-    if (video.url) {
-      const base = video.url.split('?')[0].toLowerCase();
-      const isImg =
-        /\.(png|jpe?g|gif|webp|avif|bmp)$/.test(base) ||
-        base.startsWith('data:image');
-      return { url: video.url, type: isImg ? 'image' : 'video' };
-    }
-    return null;
-  })();
 
   return (
     <div className="fixed inset-0 z-[9999] bg-black/70 flex items-center justify-center">
@@ -2046,10 +2058,15 @@ function PostShareModal({
           </div>
 
           <p className="text-[11px] text-gray-500">
-            For WhatsApp, Facebook and X, the thumbnail comes from the VextUp
-            post page when you share this link. On Instagram and TikTok, we
-            copy the message to your clipboard and open their site/app so you
-            can paste it into a post, story or DM.
+            WhatsApp, Facebook, X and others use the link&apos;s preview
+            information (Open Graph) from the VextUp share page at{' '}
+            <code className="text-[10px] bg-gray-100 px-1 rounded">
+              /s
+            </code>
+            . That page uses the thumbnail and details above so people can see
+            what&apos;s being shared before they open it. For Instagram and
+            TikTok, we copy the message to your clipboard and open their
+            site/app so you can paste it into a post, story or DM.
           </p>
         </div>
       </div>
