@@ -20,7 +20,7 @@ interface Withdrawal {
   phone?: string;
   status?: string;
   receipt?: string;
-  createdAt?: any; // Firestore Timestamp or other
+  createdAt?: any; // Firestore Timestamp, ms, or undefined
   updatedAt?: any;
 }
 
@@ -40,31 +40,40 @@ export default function WithdrawalHistory() {
       (snapshot) => {
         const list: Withdrawal[] = snapshot.docs.map((doc) => {
           const data = doc.data() as any;
+
+          const methodRaw: string | undefined =
+            typeof data.method === "string"
+              ? data.method
+              : typeof data.channel === "string"
+              ? data.channel
+              : undefined;
+
+          const phoneRaw: string | undefined =
+            typeof data.phoneNumber === "string"
+              ? data.phoneNumber
+              : typeof data.phone === "string"
+              ? data.phone
+              : undefined;
+
+          const statusRaw: string | undefined =
+            typeof data.status === "string" ? data.status : undefined;
+
+          const receiptRaw: string | undefined =
+            typeof data.receipt === "string"
+              ? data.receipt
+              : typeof data.mpesaReceipt === "string"
+              ? data.mpesaReceipt
+              : undefined;
+
           return {
             id: doc.id,
             amount: Number(data.amount) || 0,
             fee: typeof data.fee === "number" ? data.fee : undefined,
             net: typeof data.net === "number" ? data.net : undefined,
-            method:
-              typeof data.method === "string"
-                ? data.method
-                : typeof data.channel === "string"
-                ? data.channel
-                : undefined,
-            phone:
-              typeof data.phoneNumber === "string"
-                ? data.phoneNumber
-                : typeof data.phone === "string"
-                ? data.phone
-                : undefined,
-            status: typeof data.status === "string" ? data.status : undefined,
-            // 👇 support both legacy "receipt" and new "mpesaReceipt"
-            receipt:
-              typeof data.receipt === "string"
-                ? data.receipt
-                : typeof data.mpesaReceipt === "string"
-                ? data.mpesaReceipt
-                : undefined,
+            method: methodRaw,
+            phone: phoneRaw,
+            status: statusRaw,
+            receipt: receiptRaw,
             createdAt: data.createdAt,
             updatedAt: data.updatedAt,
           };
@@ -95,14 +104,17 @@ export default function WithdrawalHistory() {
     try {
       if (!ts) return "—";
 
+      // Firestore Timestamp
       if (ts.toDate && typeof ts.toDate === "function") {
         return ts.toDate().toLocaleString();
       }
 
+      // { seconds, nanoseconds }
       if (typeof ts.seconds === "number") {
         return new Date(ts.seconds * 1000).toLocaleString();
       }
 
+      // Milliseconds or ISO string
       const d = new Date(ts);
       if (!isNaN(d.getTime())) {
         return d.toLocaleString();
@@ -124,7 +136,10 @@ export default function WithdrawalHistory() {
     if (s === "processing" || s === "pending" || s === "initiated") {
       return "bg-yellow-100 text-yellow-700 border-yellow-400";
     }
-    if (s === "failed" || s === "error" || s === "cancelled") {
+    if (s === "timeout") {
+      return "bg-orange-100 text-orange-700 border-orange-400";
+    }
+    if (s === "failed" || s === "error" || s === "cancelled" || s === "canceled") {
       return "bg-red-100 text-red-700 border-red-400";
     }
     return "bg-gray-100 text-gray-700 border-gray-400";
@@ -132,9 +147,50 @@ export default function WithdrawalHistory() {
 
   const formatStatus = (status?: string): string => {
     if (!status || typeof status !== "string") return "—";
-    const trimmed = status.trim();
-    if (!trimmed) return "—";
-    return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+    const s = status.trim().toLowerCase();
+    if (!s) return "—";
+
+    switch (s) {
+      case "initiated":
+        return "Initiated (awaiting M-Pesa)";
+      case "pending":
+      case "processing":
+        return "Processing";
+      case "success":
+      case "completed":
+        return "Successful";
+      case "failed":
+        return "Failed";
+      case "timeout":
+        return "Timeout (no response)";
+      case "canceled":
+        return "Cancelled";
+      default:
+        return s.charAt(0).toUpperCase() + s.slice(1);
+    }
+  };
+
+  const formatMethod = (method?: string): string => {
+    if (!method) return "—";
+    const m = method.toLowerCase();
+
+    if (m.includes("mpesa") || m.includes("m-pesa")) {
+      return "M-Pesa (B2C)";
+    }
+    if (m === "wallet" || m === "internal") {
+      return "Internal wallet";
+    }
+
+    return method;
+  };
+
+  const formatPhone = (phone?: string): string => {
+    if (!phone) return "—";
+    // Show +254... if missing plus
+    if (/^2547\d{8}$/.test(phone)) {
+      return `+${phone}`;
+    }
+    return phone;
   };
 
   return (
@@ -166,10 +222,10 @@ export default function WithdrawalHistory() {
                     KES {w.amount.toFixed(2)}
                   </td>
                   <td className="py-2 px-3">
-                    {w.method ? String(w.method) : "—"}
+                    {formatMethod(w.method)}
                   </td>
                   <td className="py-2 px-3">
-                    {w.phone ? String(w.phone) : "—"}
+                    {formatPhone(w.phone)}
                   </td>
                   <td className="py-2 px-3">
                     <span

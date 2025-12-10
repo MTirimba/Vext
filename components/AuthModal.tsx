@@ -1,49 +1,70 @@
 // /workspaces/Vext/components/AuthModal.tsx
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   GoogleAuthProvider,
   signInWithPopup,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
+  RecaptchaVerifier,
+  signInWithPhoneNumber,
+  PhoneAuthProvider,
+  linkWithCredential,
 } from 'firebase/auth';
 import { auth, db } from '@/lib/firebase';
 import { createUserProfile } from '@/lib/auth';
 import { collection, getDocs, query, where } from 'firebase/firestore';
 
-export interface AuthModalProps {
-  open: boolean;
-  onClose: () => void;
-}
-
 /* ----------------- Helpers ----------------- */
 
-// Very light E.164 normalizer for KE-style numbers so users can type
-// 07xxxxxxxx, 7xxxxxxxx, 2547xxxxxxxx or +2547xxxxxxxx.
-function normalizeE164(phone: string | undefined): string {
-  let v = (phone || '').trim();
-  if (!v) throw new Error('Enter a valid phone number.');
+// Very simple email detector
+function looksLikeEmail(value: string): boolean {
+  const v = value.trim();
+  if (!v) return false;
+  return v.includes('@');
+}
+
+// Treat anything without @ as "phone-like"
+function looksLikePhone(value: string): boolean {
+  const v = value.trim();
+  if (!v) return false;
+  if (v.includes('@')) return false;
+  // digits, plus, optional spaces
+  return /^[+0-9\s]+$/.test(v);
+}
+
+// Normalize Kenyan-style phone numbers to E.164
+// Supports: +2547XXXXXXXX, 2547XXXXXXXX, 07XXXXXXXX, 7XXXXXXXX
+function normalizePhoneToE164(input: string): string {
+  let v = input.trim().replace(/\s+/g, '');
+  if (!v) {
+    throw new Error('Enter a phone number.');
+  }
 
   // Already E.164
-  if (v.startsWith('+')) return v;
+  if (v.startsWith('+')) {
+    return v;
+  }
 
-  // Strip spaces
-  v = v.replace(/\s+/g, '');
+  // 2547XXXXXXXX -> +2547XXXXXXXX
+  if (/^2547\d{8}$/.test(v)) {
+    return `+${v}`;
+  }
 
-  // 2547xxxxxxxx -> +2547xxxxxxxx
-  if (/^2547\d{8}$/.test(v)) return `+${v}`;
+  // 07XXXXXXXX -> +2547XXXXXXXX
+  if (/^07\d{8}$/.test(v)) {
+    return `+254${v.slice(1)}`;
+  }
 
-  // 07xxxxxxxx -> +2547xxxxxxxx
-  if (/^07\d{8}$/.test(v)) return `+254${v.slice(1)}`;
+  // 7XXXXXXXX -> +2547XXXXXXXX
+  if (/^7\d{8}$/.test(v)) {
+    return `+254${v}`;
+  }
 
-  // 7xxxxxxxx -> +2547xxxxxxxx
-  if (/^7\d{8}$/.test(v)) return `+254${v}`;
-
-  // Fallback – treat as already international
-  if (/^\d{8,15}$/.test(v)) return `+${v}`;
-
-  throw new Error('Enter a valid phone number (e.g. +2547XXXXXXXX).');
+  throw new Error(
+    'Enter a valid phone number like 07XXXXXXXX, 7XXXXXXXX or +2547XXXXXXXX.'
+  );
 }
 
 async function findProfileByPhone(e164: string) {
@@ -54,20 +75,44 @@ async function findProfileByPhone(e164: string) {
   return { id: d.id, ...(d.data() as any) };
 }
 
-function looksLikeEmail(value: string): boolean {
-  return value.includes('@');
-}
-
 /* ----------------- Component ----------------- */
 
+export interface AuthModalProps {
+  open: boolean;
+  onClose: () => void;
+}
+
 export default function AuthModal({ open, onClose }: AuthModalProps) {
-  // single Instagram-style form
-  const [identifier, setIdentifier] = useState(''); // email or phone
+  const [identifier, setIdentifier] = useState(''); // email OR phone
   const [password, setPassword] = useState('');
   const [isSignUp, setIsSignUp] = useState(false);
+  const toggleMode = () => setIsSignUp((v) => !v);
+
+  // Phone OTP state (only used when identifier looks like a phone)
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpCode, setOtpCode] = useState('');
+  const confirmationRef =
+    useRef<import('firebase/auth').ConfirmationResult | null>(null);
+
+  // If this phone belongs to a profile with an email,
+  // ask for that email's password so we can link.
+  const [linkingInfo, setLinkingInfo] = useState<{ email?: string } | null>(
+    null,
+  );
+  const [linkPassword, setLinkPassword] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Lock body scroll when modal open
+  // UI
+  const isEmailLike = useMemo(
+    () => looksLikeEmail(identifier),
+    [identifier],
+  );
+  const isPhoneLike = useMemo(
+    () => looksLikePhone(identifier),
+    [identifier],
+  );
+
+  // Disable scroll behind modal
   useEffect(() => {
     document.body.style.overflow = open ? 'hidden' : '';
     return () => {
@@ -75,93 +120,154 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
     };
   }, [open]);
 
-  const toggleMode = () => setIsSignUp((v) => !v);
+  // Reset phone-OTP-specific state when identifier changes
+  useEffect(() => {
+    setOtpSent(false);
+    setOtpCode('');
+    setLinkingInfo(null);
+  }, [identifier]);
 
-  // ---------- Google ----------
+  /* ---------- Google Sign-in ---------- */
 
   const handleGoogle = async () => {
     try {
-      setLoading(true);
       const provider = new GoogleAuthProvider();
       const result = await signInWithPopup(auth, provider);
       await createUserProfile(result.user);
       onClose();
     } catch (err: any) {
       alert(err.message || 'Google sign-in failed');
+    }
+  };
+
+  /* ---------- Email / Password flow ---------- */
+
+  const handleEmailSubmit = async () => {
+    try {
+      const email = identifier.trim();
+      if (!email || !looksLikeEmail(email)) {
+        alert('Enter a valid email address.');
+        return;
+      }
+      if (!password) {
+        alert('Enter your password.');
+        return;
+      }
+
+      setLoading(true);
+
+      const cred = isSignUp
+        ? await createUserWithEmailAndPassword(auth, email, password)
+        : await signInWithEmailAndPassword(auth, email, password);
+
+      await createUserProfile(cred.user);
+      onClose();
+    } catch (err: any) {
+      alert(err.message || 'Authentication failed.');
     } finally {
       setLoading(false);
     }
   };
 
-  // ---------- Email / Phone + Password flow ----------
+  /* ---------- Phone + OTP flow ---------- */
 
-  const handleSubmit = async () => {
+  // create (or reuse) invisible reCAPTCHA
+  const ensureRecaptcha = async () => {
+    if ((window as any).reCaptchaVerifier) {
+      return (window as any).reCaptchaVerifier as RecaptchaVerifier;
+    }
+    const verifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
+      size: 'invisible',
+    });
+    (window as any).reCaptchaVerifier = verifier;
+    return verifier;
+  };
+
+  const sendOtp = async () => {
     try {
-      const rawId = identifier.trim();
-      const pwd = password;
+      const raw = identifier.trim();
+      if (!looksLikePhone(raw)) {
+        alert('Enter a valid phone number.');
+        return;
+      }
 
-      if (!rawId) return alert('Enter your email or phone number.');
-      if (!pwd) return alert('Enter your password.');
+      setLoading(true);
+      const e164 = normalizePhoneToE164(raw);
+
+      const verifier = await ensureRecaptcha();
+      const confirmation = await signInWithPhoneNumber(auth, e164, verifier);
+      confirmationRef.current = confirmation;
+      setOtpSent(true);
+
+      // Check if that phone already maps to an existing profile with email
+      const prof = await findProfileByPhone(e164);
+      if (prof?.email) {
+        setLinkingInfo({ email: prof.email });
+      } else {
+        setLinkingInfo(null);
+      }
+    } catch (err: any) {
+      console.error('[AUTH_MODAL] sendOtp error:', err);
+      alert(err.message || 'Failed to send code. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const confirmOtp = async () => {
+    try {
+      if (!confirmationRef.current) {
+        alert('Please request a code first.');
+        return;
+      }
+      if (!otpCode.trim()) {
+        alert('Enter the code you received.');
+        return;
+      }
 
       setLoading(true);
 
-      let emailToUse = rawId;
+      const raw = identifier.trim();
+      const e164 = normalizePhoneToE164(raw);
 
-      if (looksLikeEmail(rawId)) {
-        // Treat as normal email
-        emailToUse = rawId;
-      } else {
-        // Treat as phone for **sign in** – map phone → profile.email
-        if (isSignUp) {
+      const phoneCred = PhoneAuthProvider.credential(
+        confirmationRef.current.verificationId,
+        otpCode.trim(),
+      );
+
+      // If phone belongs to an email-based profile, sign in with that email
+      // and then link the phone credential.
+      if (linkingInfo?.email) {
+        if (!linkPassword) {
           setLoading(false);
-          return alert(
-            'Please sign up with an email address for now. ' +
-              'You can add your phone number in your profile after creating the account.'
-          );
+          alert('Enter the password for ' + linkingInfo.email);
+          return;
         }
 
-        // Sign-in with phone + password
-        const e164 = normalizeE164(rawId);
-        const prof = await findProfileByPhone(e164);
-        if (!prof || !prof.email) {
-          setLoading(false);
-          return alert(
-            'No account found for that phone number. Try using your email, or sign up first.'
-          );
-        }
-        emailToUse = prof.email as string;
-      }
-
-      if (isSignUp) {
-        // New account – must be a real email
-        if (!looksLikeEmail(emailToUse)) {
-          setLoading(false);
-          return alert(
-            'You must sign up with a valid email address (e.g. name@example.com).'
-          );
-        }
-
-        const cred = await createUserWithEmailAndPassword(
+        const emailUser = await signInWithEmailAndPassword(
           auth,
-          emailToUse,
-          pwd
+          linkingInfo.email,
+          linkPassword,
         );
-        await createUserProfile(cred.user);
+        await linkWithCredential(emailUser.user, phoneCred);
+        await createUserProfile(emailUser.user);
         onClose();
         return;
       }
 
-      // Sign-in
-      const cred = await signInWithEmailAndPassword(auth, emailToUse, pwd);
-      await createUserProfile(cred.user); // ensures profile doc exists / updated
+      // Normal phone-only sign-in (creates account if needed)
+      const result = await confirmationRef.current.confirm(otpCode.trim());
+      await createUserProfile(result.user);
       onClose();
     } catch (err: any) {
-      console.error('[AUTH_MODAL] Auth error:', err);
-      alert(err.message || 'Authentication failed. Please try again.');
+      console.error('[AUTH_MODAL] confirmOtp error:', err);
+      alert(err.message || 'Verification failed. Please try again.');
     } finally {
       setLoading(false);
     }
   };
+
+  /* ---------- Render ---------- */
 
   if (!open) return null;
 
@@ -176,7 +282,7 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
           ×
         </button>
 
-        {/* Logo — larger */}
+        {/* Logo */}
         <div className="mb-5">
           <img
             src="/vextup-logo.png"
@@ -185,66 +291,138 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
           />
         </div>
 
-        {/* Title */}
-        <h2 className="text-lg font-semibold mb-1">Welcome to VextUp</h2>
-        <p className="text-xs text-gray-500 mb-4">
-          Sign in with your email or phone number and password.
-        </p>
-
-        {/* Google button */}
+        {/* Google */}
         <button
           onClick={handleGoogle}
-          disabled={loading}
-          className="w-full py-2 rounded-md text-white font-medium transition hover:brightness-95 disabled:opacity-60 bg-gradient-to-r from-emerald-800 via-emerald-700 to-green-700 mb-3"
+          className="w-full py-2 rounded-md text-white font-medium transition hover:brightness-95 bg-gradient-to-r from-emerald-800 via-emerald-700 to-green-700 mb-4"
         >
           Continue with Google
         </button>
 
-        <div className="text-gray-400 text-xs uppercase tracking-wide mb-3">
-          or
+        <div className="text-gray-400 text-xs uppercase tracking-wide mb-4">
+          or use your email / phone
         </div>
 
-        {/* Single Instagram-like form */}
+        {/* Identifier (email OR phone) */}
         <div className="space-y-3 text-left">
           <input
             className="w-full px-3 py-2 border rounded-md text-gray-800 bg-white"
-            placeholder="Email or phone (e.g. name@example.com or +2547XXXXXXXX)"
-            type="text"
+            placeholder="Email or phone number"
             value={identifier}
             onChange={(e) => setIdentifier(e.target.value)}
           />
-          <input
-            className="w-full px-3 py-2 border rounded-md text-gray-800 bg-white"
-            placeholder="Password"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-          />
 
-          <button
-            onClick={handleSubmit}
-            disabled={loading}
-            className="w-full py-2 rounded-md text-white font-medium hover:opacity-95 disabled:opacity-60 bg-gradient-to-r from-emerald-700 via-emerald-600 to-green-600"
-          >
-            {loading
-              ? isSignUp
-                ? 'Creating account…'
-                : 'Signing in…'
-              : isSignUp
-              ? 'Create Account'
-              : 'Sign In'}
-          </button>
+          {/* -------- EMAIL MODE -------- */}
+          {isEmailLike && (
+            <>
+              <input
+                className="w-full px-3 py-2 border rounded-md text-gray-800 bg-white"
+                placeholder="Password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
 
-          <p className="text-sm text-center">
-            {isSignUp ? 'Already have an account?' : "Don't have an account?"}{' '}
-            <button
-              onClick={toggleMode}
-              className="text-emerald-700 hover:underline"
-              type="button"
-            >
-              {isSignUp ? 'Sign in' : 'Sign up'}
-            </button>
-          </p>
+              <button
+                onClick={handleEmailSubmit}
+                disabled={loading}
+                className="w-full py-2 rounded-md text-white font-medium hover:opacity-95 disabled:opacity-60 bg-gradient-to-r from-emerald-700 via-emerald-600 to-green-600"
+              >
+                {loading
+                  ? isSignUp
+                    ? 'Creating account…'
+                    : 'Signing in…'
+                  : isSignUp
+                  ? 'Create Account'
+                  : 'Sign In'}
+              </button>
+
+              <p className="text-sm text-center">
+                {isSignUp ? 'Already have an account?' : "Don't have an account?"}{' '}
+                <button
+                  onClick={toggleMode}
+                  className="text-emerald-700 hover:underline"
+                  type="button"
+                >
+                  {isSignUp ? 'Sign in' : 'Sign up'}
+                </button>
+              </p>
+            </>
+          )}
+
+          {/* -------- PHONE MODE (OTP) -------- */}
+          {isPhoneLike && (
+            <>
+              {!otpSent ? (
+                <>
+                  <button
+                    onClick={sendOtp}
+                    disabled={loading}
+                    className="w-full py-2 rounded-md text-white font-medium hover:opacity-95 disabled:opacity-60 bg-gradient-to-r from-emerald-700 via-emerald-600 to-green-600"
+                  >
+                    {loading ? 'Sending code…' : 'Send code'}
+                  </button>
+                  <p className="text-xs text-gray-500 text-center">
+                    We’ll send a 6-digit code via SMS to verify it’s you.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <input
+                    className="w-full px-3 py-2 border rounded-md text-gray-800 bg-white"
+                    placeholder="Enter 6-digit code"
+                    value={otpCode}
+                    onChange={(e) => setOtpCode(e.target.value)}
+                  />
+
+                  {/* If phone belongs to an existing email account, ask for that password to link */}
+                  {linkingInfo?.email && (
+                    <div className="space-y-1">
+                      <div className="text-sm">
+                        This number matches an existing account:{' '}
+                        <b>{linkingInfo.email}</b>
+                      </div>
+                      <input
+                        className="w-full px-3 py-2 border rounded-md text-gray-800 bg-white"
+                        placeholder="Password for existing account"
+                        type="password"
+                        value={linkPassword}
+                        onChange={(e) => setLinkPassword(e.target.value)}
+                      />
+                    </div>
+                  )}
+
+                  <button
+                    onClick={confirmOtp}
+                    disabled={loading}
+                    className="w-full py-2 rounded-md text-white font-medium hover:opacity-95 disabled:opacity-60 bg-gradient-to-r from-emerald-700 via-emerald-600 to-green-600"
+                  >
+                    {loading
+                      ? 'Verifying…'
+                      : linkingInfo?.email
+                      ? 'Verify & Link'
+                      : 'Verify & Sign In'}
+                  </button>
+                </>
+              )}
+
+              <p className="text-xs text-gray-500 text-center mt-1">
+                You can sign in again later using the same phone number. No email
+                is required.
+              </p>
+            </>
+          )}
+
+          {/* If identifier is neither a clear email nor phone, show a small hint */}
+          {!isEmailLike && !isPhoneLike && identifier.trim() && (
+            <p className="text-[11px] text-red-500">
+              Enter a valid email (e.g. name@example.com) or phone number (e.g.
+              07XXXXXXXX or +2547XXXXXXXX).
+            </p>
+          )}
+
+          {/* Invisible reCAPTCHA anchor for phone sign-in */}
+          <div id="recaptcha-container" />
         </div>
       </div>
     </div>
