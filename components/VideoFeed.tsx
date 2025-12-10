@@ -1,7 +1,7 @@
 // /workspaces/Vext/components/VideoFeed.tsx
-'use client';
+"use client";
 
-import { useEffect, useState, useRef, useMemo } from 'react';
+import { useEffect, useState, useRef, useMemo } from "react";
 import {
   collection,
   getDocs,
@@ -15,9 +15,9 @@ import {
   limit,
   updateDoc,
   where,
-} from 'firebase/firestore';
-import { db, auth } from '../lib/firebase';
-import { useAuthState } from 'react-firebase-hooks/auth';
+} from "firebase/firestore";
+import { db, auth } from "../lib/firebase";
+import { useAuthState } from "react-firebase-hooks/auth";
 import {
   FaChevronDown,
   FaChevronUp,
@@ -39,54 +39,44 @@ import {
   FaTwitter,
   FaEnvelope,
   FaInstagram,
-  FaUser, // 👈 generic user icon for top-right menu button
-} from 'react-icons/fa';
-import { SiTiktok } from 'react-icons/si';
-import { useRouter } from 'next/navigation';
-import { CommentModal } from './CommentModal';
-import BookingModal from './BookingModal';
-import { EditVideoModal } from './EditVideoModal';
-import AuthModal from './AuthModal';
+  FaUser,
+} from "react-icons/fa";
+import { SiTiktok } from "react-icons/si";
+import { useRouter } from "next/navigation";
+import { CommentModal } from "./CommentModal";
+import BookingModal from "./BookingModal";
+import { EditVideoModal } from "./EditVideoModal";
+import AuthModal from "./AuthModal";
 
-// 🧠 feed ranking
+// feed ranking
 import {
   rankVideos,
   signalsFromLocalStorage,
   type VideoDoc as AlgoVideoDoc,
-} from '@/lib/feedAlgo';
+} from "@/lib/feedAlgo";
 
-// Shared config types & data
+// Shared config
 import {
   SERVICE_CATEGORIES,
   type HairColorId,
   type NailShapeId,
-} from '@/lib/serviceConfig';
+} from "@/lib/serviceConfig";
 
-// Infer CategoryId from SERVICE_CATEGORIES instead of importing it
-type CategoryId = (typeof SERVICE_CATEGORIES)[number]['id'];
+type CategoryId = (typeof SERVICE_CATEGORIES)[number]["id"];
 
-// Filters dropdown component
-import ServiceFiltersDropdown, {
-  type FeedFilters,
-} from './ServiceFiltersDropdown';
+import ServiceFiltersDropdown, { type FeedFilters } from "./ServiceFiltersDropdown";
 
 // ---------- markup config (tiered) ----------
-
 interface MarkupTier {
   min: number;
-  max: number | null; // null = open-ended
-  percent: number; // e.g. 10 = 10%
+  max: number | null;
+  percent: number;
 }
 
 interface MarkupConfig {
   tiers: MarkupTier[];
 }
 
-// Default tiers (used if config/pricing missing or invalid)
-// 1–1500  → 10%
-// 1500–5000 → 5%
-// 5000–10000 → 2.5%
-// 10000+ → 2%
 const DEFAULT_MARKUP_CONFIG: MarkupConfig = {
   tiers: [
     { min: 0, max: 1500, percent: 10 },
@@ -112,12 +102,12 @@ function applyMarkup(basePrice: number, config?: MarkupConfig | null) {
 // --- types
 interface MediaItem {
   url: string;
-  type?: 'image' | 'video';
+  type?: "image" | "video";
   name?: string;
 }
 
 interface VideoDoc {
-  url: string; // legacy primary url
+  url: string;
   title?: string;
   description?: string;
   userId?: string;
@@ -126,16 +116,13 @@ interface VideoDoc {
   id: string;
   videoId?: string;
 
-  // NEW: createdAt for freshness (if present on your doc)
   createdAt?: number;
 
-  // carousel fields
   media?: MediaItem[];
   hasCarousel?: boolean;
   coverUrl?: string;
   specialInstructions?: string | null;
 
-  // NEW: discovery metadata (from UploadModal)
   categoryId?: CategoryId | string;
   categoryLabel?: string;
   subcategoryId?: string;
@@ -144,11 +131,11 @@ interface VideoDoc {
   targetGender?: string | null;
   targetAgeGroup?: string | null;
 
-  hairColors?: string[]; // ids like "black", "blonde"
-  nailShapes?: string[]; // ids like "oval", "stiletto"
+  hairColors?: string[];
+  nailShapes?: string[];
   nailLength?: string | null;
 
-  locationTag?: string | null; // e.g. "My Salon, Westlands, Nairobi"
+  locationTag?: string | null;
 }
 
 interface UserProfile {
@@ -161,7 +148,6 @@ interface UserProfile {
   location?: string;
   businessName?: string;
 
-  // optional extra metadata used by filters
   town?: string;
   county?: string;
   gender?: string;
@@ -169,64 +155,63 @@ interface UserProfile {
   targetAgeGroup?: string;
 }
 
-/** Basic notification model coming from Firestore */
 interface UserNotification {
   id: string;
   type?:
-    | 'booking-accepted'
-    | 'booking-rejected'
-    | 'booking-reminder'
-    | 'new-booking'
-    | 'generic';
+    | "booking-accepted"
+    | "booking-rejected"
+    | "booking-reminder"
+    | "new-booking"
+    | "generic";
   bookingId?: string;
   bookingStatus?: string;
   bookingTime?: number;
   createdAt?: number;
   read?: boolean;
   message?: string;
-  role?: 'client' | 'provider';
+  role?: "client" | "provider";
 }
 
 /* ---------------- helpers ---------------- */
 
 function normalizeHandle(v?: string | null) {
-  return (v || '').trim().toLowerCase();
+  return (v || "").trim().toLowerCase();
 }
 
 function formatNotificationTime(ts?: number) {
-  if (!ts) return '';
+  if (!ts) return "";
   try {
     const d = new Date(ts);
     return d.toLocaleString(undefined, {
-      day: 'numeric',
-      month: 'short',
-      hour: '2-digit',
-      minute: '2-digit',
+      day: "numeric",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
     });
   } catch {
-    return '';
+    return "";
   }
 }
 
 function getNotificationTitle(n: UserNotification): string {
   switch (n.type) {
-    case 'booking-accepted':
-      return 'Your booking was accepted';
-    case 'booking-rejected':
-      return 'Your booking was rejected';
-    case 'booking-reminder':
-      return 'Upcoming booking reminder';
-    case 'new-booking':
-      return 'New client booking';
+    case "booking-accepted":
+      return "Your booking was accepted";
+    case "booking-rejected":
+      return "Your booking was rejected";
+    case "booking-reminder":
+      return "Upcoming booking reminder";
+    case "new-booking":
+      return "New client booking";
     default:
-      return 'Booking update';
+      return "Booking update";
   }
 }
 
 function getNotificationSubtitle(n: UserNotification): string {
   if (n.message) return n.message;
 
-  if (n.type === 'booking-reminder' && n.bookingTime) {
+  if (n.type === "booking-reminder" && n.bookingTime) {
     const when = formatNotificationTime(n.bookingTime);
     return `You have a booking scheduled for ${when}.`;
   }
@@ -235,7 +220,7 @@ function getNotificationSubtitle(n: UserNotification): string {
     return `Booking status: ${n.bookingStatus}`;
   }
 
-  return 'Tap to view booking details.';
+  return "Tap to view booking details.";
 }
 
 export default function VideoFeed() {
@@ -251,10 +236,10 @@ export default function VideoFeed() {
   const [bookingVideo, setBookingVideo] = useState<VideoDoc | null>(null);
   const [editingVideo, setEditingVideo] = useState<VideoDoc | null>(null);
 
-  // NEW: share modal state
+  // share modal
   const [shareVideo, setShareVideo] = useState<VideoDoc | null>(null);
 
-  // NEW: markup config state
+  // markup config
   const [markupConfig, setMarkupConfig] = useState<MarkupConfig | null>(null);
 
   const sliderRef = useRef<HTMLDivElement | null>(null);
@@ -264,67 +249,65 @@ export default function VideoFeed() {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [authDialogOpen, setAuthDialogOpen] = useState(false);
   const [isProvider, setIsProvider] = useState(false);
-  const [username, setUsername] = useState('');
+  const [username, setUsername] = useState("");
   const router = useRouter();
 
-  // 🔔 notifications
+  // notifications
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notifications, setNotifications] = useState<UserNotification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
 
-  // 💬 messages (unread conversations count)
+  // messages (unread conversations count)
   const [unreadMessagesCount, setUnreadMessagesCount] = useState(0);
 
-  // 🔎 slide-out search UI state
+  // search UI state
   const [searchOpen, setSearchOpen] = useState(false);
-  const [searchTerm, setSearchTerm] = useState('');
+  const [searchTerm, setSearchTerm] = useState("");
 
-  // 🧩 Track current vertical index
+  // current vertical index
   const [currentIndex, setCurrentIndex] = useState(0);
 
-  // 🧭 Per-post carousel index (postId → index)
+  // per-post carousel index
   const [mediaIndexMap, setMediaIndexMap] = useState<Record<string, number>>(
     {},
   );
 
-  // 🖐️ Per-post touch positions for swipe
+  // touch positions
   const touchStartXRef = useRef<Record<string, number>>({});
   const touchStartYRef = useRef<Record<string, number>>({});
 
-  // 🎯 Filters (used by sliders icon)
+  // filters
   const [filters, setFilters] = useState<FeedFilters>({
-    gender: 'any',
-    ageGroup: 'any',
-    location: '',
+    gender: "any",
+    ageGroup: "any",
+    location: "",
     categories: [],
     hairColors: [],
     nailShapes: [],
-    nailLength: 'any',
+    nailLength: "any",
   });
   const [filtersOpen, setFiltersOpen] = useState(false);
 
-  // aggregated attention flags
   const hasUnreadNotifications = unreadCount > 0;
   const hasUnreadMessages = unreadMessagesCount > 0;
   const hasAnyAttentionDot = hasUnreadNotifications || hasUnreadMessages;
 
-  // Helpers
   const isImageUrl = (url: string) => {
     if (!url) return false;
-    const u = url.split('?')[0].toLowerCase();
+    const u = url.split("?")[0].toLowerCase();
     return (
-      /\.(png|jpe?g|gif|webp|avif|bmp)$/.test(u) || url.startsWith('data:image')
+      /\.(png|jpe?g|gif|webp|avif|bmp)$/.test(u) || url.startsWith("data:image")
     );
   };
 
   const getMediaList = (v: VideoDoc): MediaItem[] => {
     if (v.media && v.media.length > 0) return v.media;
     return v.url
-      ? [{ url: v.url, type: isImageUrl(v.url) ? 'image' : 'video' }]
+      ? [{ url: v.url, type: isImageUrl(v.url) ? "image" : "video" }]
       : [];
   };
 
-  // establish slider ref
+  // slider ref
   useEffect(() => {
     if (sliderRef.current) {
       sliderInstanceRef.current = sliderRef.current;
@@ -332,18 +315,18 @@ export default function VideoFeed() {
     }
   }, []);
 
-  // 🔁 load markup config from Firestore (shared with admin)
+  // load markup config
   useEffect(() => {
     (async () => {
       try {
-        const snap = await getDoc(doc(db, 'config', 'pricing'));
+        const snap = await getDoc(doc(db, "config", "pricing"));
         if (snap.exists()) {
           const data = snap.data() as any;
           if (Array.isArray(data.tiers)) {
             const tiers: MarkupTier[] = data.tiers.map((t: any) => ({
               min: Number(t.min) || 0,
               max:
-                typeof t.max === 'number'
+                typeof t.max === "number"
                   ? t.max
                   : t.max == null
                   ? null
@@ -354,17 +337,17 @@ export default function VideoFeed() {
           }
         }
       } catch (err) {
-        console.error('load markup config error', err);
+        console.error("load markup config error", err);
       }
     })();
   }, []);
 
-  // intersection observer for auto-play
+  // intersection observer
   useEffect(() => {
     const root = sliderRef.current;
     if (!root) return;
     const videosEls = Array.from(
-      root.querySelectorAll('video'),
+      root.querySelectorAll("video"),
     ) as HTMLVideoElement[];
     videosEls.forEach((v) => v.pause());
 
@@ -387,9 +370,9 @@ export default function VideoFeed() {
     videosEls.forEach((v) => observer.observe(v));
     return () => observer.disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [videos.map((v) => v.id).join('|')]);
+  }, [videos.map((v) => v.id).join("|")]);
 
-  // custom wheel-scroll
+  // custom wheel scroll
   useEffect(() => {
     const el = sliderRef.current;
     if (!el) return;
@@ -411,38 +394,36 @@ export default function VideoFeed() {
       }, 120);
     };
 
-    el.addEventListener('wheel', onWheel, { passive: false });
+    el.addEventListener("wheel", onWheel, { passive: false });
     return () => {
-      el.removeEventListener('wheel', onWheel as EventListener);
+      el.removeEventListener("wheel", onWheel as unknown as EventListener);
       clearTimeout(wheelTimeout);
     };
   });
 
   // ------------------------------
-  // Fetch videos once (then rank)
+  // Fetch videos
   // ------------------------------
   useEffect(() => {
     (async () => {
       try {
         const snap = await getDocs(
-          query(collection(db, 'videos'), orderBy('createdAt', 'desc')),
+          query(collection(db, "videos"), orderBy("createdAt", "desc")),
         );
         const docs = snap.docs.map((d) => ({
           ...(d.data() as VideoDoc),
           id: d.id,
         }));
 
-        // keep raw pool
         setAllVideos(docs);
 
-        // build initial ranking without follow signals (not yet loaded)
         const localSignals = signalsFromLocalStorage();
 
         const rankedInitial = rankVideos(
           docs as unknown as AlgoVideoDoc[],
           {
             userId: user?.uid,
-            followsByCreatorId: {}, // filled later once we fetch followMap
+            followsByCreatorId: {},
             ...localSignals,
           },
           {
@@ -451,11 +432,11 @@ export default function VideoFeed() {
           },
         );
 
-        // honor lastVideoId pin-to-top behavior
         const savedId =
-          typeof window !== 'undefined'
-            ? localStorage.getItem('lastVideoId')
+          typeof window !== "undefined"
+            ? localStorage.getItem("lastVideoId")
             : null;
+
         let orderedVideos = rankedInitial as VideoDoc[];
 
         if (savedId) {
@@ -468,7 +449,6 @@ export default function VideoFeed() {
 
         setVideos(orderedVideos);
 
-        // scroll to saved after first paint
         if (savedId && sliderRef.current) {
           setTimeout(() => {
             const idx = orderedVideos.findIndex((v) => v.id === savedId);
@@ -476,32 +456,29 @@ export default function VideoFeed() {
               const h = sliderRef.current.clientHeight || window.innerHeight;
               sliderRef.current.scrollTo({
                 top: idx * h,
-                behavior: 'auto',
+                behavior: "auto",
               });
             }
           }, 600);
         }
 
-        // fetch minimal creator profiles (for pills/booking)
         const uids = [...new Set(docs.map((v) => v.userId).filter(Boolean))];
         const profiles: Record<string, UserProfile> = {};
         await Promise.all(
           uids.map(async (id) => {
-            const ps = await getDoc(doc(db, 'users', id!));
+            const ps = await getDoc(doc(db, "users", id!));
             if (ps.exists()) profiles[id!] = ps.data() as UserProfile;
           }),
         );
         setUserProfiles(profiles);
       } catch (err) {
-        console.error('videos fetch error', err);
+        console.error("videos fetch error", err);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ------------------------------
-  // Likes/Follows when user changes
-  // ------------------------------
+  // likes/follows
   useEffect(() => {
     if (!user || videos.length === 0) {
       if (!user) {
@@ -517,7 +494,7 @@ export default function VideoFeed() {
         await Promise.all(
           videos.map(async (v) => {
             const ldoc = await getDoc(
-              doc(db, 'videos', v.id, 'likes', user.uid!),
+              doc(db, "videos", v.id, "likes", user.uid!),
             );
             lm[v.id] = ldoc.exists();
           }),
@@ -529,19 +506,19 @@ export default function VideoFeed() {
         await Promise.all(
           uids.map(async (id) => {
             const fdoc = await getDoc(
-              doc(db, 'users', id!, 'followers', user.uid!),
+              doc(db, "users", id!, "followers", user.uid!),
             );
             fl[id!] = fdoc.exists();
           }),
         );
         setFollowMap(fl);
       } catch (err) {
-        console.error('likes/follows fetch error', err);
+        console.error("likes/follows fetch error", err);
       }
     })();
   }, [user, videos]);
 
-  // re-rank once followMap is known (gives social boost)
+  // re-rank once followMap is known
   useEffect(() => {
     if (allVideos.length === 0) return;
     const localSignals = signalsFromLocalStorage();
@@ -558,10 +535,9 @@ export default function VideoFeed() {
       },
     ) as VideoDoc[];
 
-    // keep current savedId on top if set
     const savedId =
-      typeof window !== 'undefined'
-        ? localStorage.getItem('lastVideoId')
+      typeof window !== "undefined"
+        ? localStorage.getItem("lastVideoId")
         : null;
     let ordered = ranked;
     if (savedId) {
@@ -578,17 +554,17 @@ export default function VideoFeed() {
   // restore username/isProvider
   useEffect(() => {
     if (!user) return;
-    getDoc(doc(db, 'users', user.uid)).then((snap) => {
+    getDoc(doc(db, "users", user.uid)).then((snap) => {
       const data = snap.data() as any;
       if (data) {
         setIsProvider(!!data.isProvider);
-        const personalHandle = data.personalUsername || data.username || '';
+        const personalHandle = data.personalUsername || data.username || "";
         setUsername(personalHandle);
       }
     });
   }, [user]);
 
-  // 🔔 live notifications subscription
+  // notifications subscription
   useEffect(() => {
     if (!user) {
       setNotifications([]);
@@ -596,11 +572,11 @@ export default function VideoFeed() {
       return;
     }
 
-    const notifRef = collection(db, 'users', user.uid, 'notifications');
-    const q = query(notifRef, orderBy('createdAt', 'desc'), limit(50));
+    const notifRef = collection(db, "users", user.uid, "notifications");
+    const qNotif = query(notifRef, orderBy("createdAt", "desc"), limit(50));
 
     const unsub = onSnapshot(
-      q,
+      qNotif,
       (snap) => {
         const items: UserNotification[] = snap.docs.map((d) => ({
           ...(d.data() as any),
@@ -611,21 +587,20 @@ export default function VideoFeed() {
         setUnreadCount(unread);
       },
       (err) => {
-        console.error('notifications snapshot error', err);
+        console.error("notifications snapshot error", err);
       },
     );
 
     return () => unsub();
   }, [user]);
 
-  // 💬 live unread messages subscription based on conversations/messages
+  // unread messages subscription
   useEffect(() => {
     if (!user) {
       setUnreadMessagesCount(0);
       return;
     }
 
-    // we track last message per conversation
     const lastMessageByConversation: Record<
       string,
       { sender?: string; read?: boolean }
@@ -633,9 +608,9 @@ export default function VideoFeed() {
     const messageUnsubs = new Map<string, () => void>();
 
     const convQ = query(
-      collection(db, 'conversations'),
-      where('participants', 'array-contains', user.uid),
-      orderBy('createdAt', 'desc'),
+      collection(db, "conversations"),
+      where("participants", "array-contains", user.uid),
+      orderBy("createdAt", "desc"),
     );
 
     const convUnsub = onSnapshot(
@@ -647,17 +622,16 @@ export default function VideoFeed() {
           const convId = convDoc.id;
           currentConvIds.add(convId);
 
-          // set up last-message listener only once per conversation
           if (!messageUnsubs.has(convId)) {
             const messagesRef = collection(
               db,
-              'conversations',
+              "conversations",
               convId,
-              'messages',
+              "messages",
             );
             const lastMsgQ = query(
               messagesRef,
-              orderBy('createdAt', 'desc'),
+              orderBy("createdAt", "desc"),
               limit(1),
             );
 
@@ -674,8 +648,6 @@ export default function VideoFeed() {
                   delete lastMessageByConversation[convId];
                 }
 
-                // recompute unread conversations:
-                // last message exists, not sent by me, and read !== true
                 let unreadConversations = 0;
                 Object.entries(lastMessageByConversation).forEach(
                   ([, msg]) => {
@@ -691,7 +663,7 @@ export default function VideoFeed() {
                 setUnreadMessagesCount(unreadConversations);
               },
               (err) => {
-                console.error('last message snapshot error', err);
+                console.error("last message snapshot error", err);
               },
             );
 
@@ -699,7 +671,6 @@ export default function VideoFeed() {
           }
         });
 
-        // clean up listeners for conversations that no longer exist
         for (const [convId, unsub] of messageUnsubs.entries()) {
           if (!currentConvIds.has(convId)) {
             unsub();
@@ -709,7 +680,7 @@ export default function VideoFeed() {
         }
       },
       (err) => {
-        console.error('conversations snapshot error (messages)', err);
+        console.error("conversations snapshot error (messages)", err);
       },
     );
 
@@ -719,7 +690,7 @@ export default function VideoFeed() {
     };
   }, [user]);
 
-  // 🔔 when notifications modal opens, mark unread as read
+  // mark notifications read on open
   useEffect(() => {
     if (!notificationsOpen || !user) return;
     const unread = notifications.filter((n) => !n.read);
@@ -728,21 +699,21 @@ export default function VideoFeed() {
     unread.forEach(async (n) => {
       try {
         await updateDoc(
-          doc(db, 'users', user.uid!, 'notifications', n.id),
+          doc(db, "users", user.uid!, "notifications", n.id),
           { read: true },
         );
       } catch (err) {
-        console.error('mark notification read error', err);
+        console.error("mark notification read error", err);
       }
     });
   }, [notificationsOpen, notifications, user]);
 
-  // restore lastVideoId position (if still in list)
+  // restore lastVideoId
   useEffect(() => {
     if (!user) return;
     const savedId =
-      typeof window !== 'undefined'
-        ? localStorage.getItem('lastVideoId')
+      typeof window !== "undefined"
+        ? localStorage.getItem("lastVideoId")
         : null;
     if (!savedId) return;
     if (videos.length === 0) return;
@@ -750,20 +721,20 @@ export default function VideoFeed() {
     const idx = videos.findIndex((v) => v.id === savedId);
     if (idx >= 0 && sliderRef.current) {
       const h = sliderRef.current.clientHeight || window.innerHeight;
-      sliderRef.current.scrollTo({ top: idx * h, behavior: 'auto' });
+      sliderRef.current.scrollTo({ top: idx * h, behavior: "auto" });
       setTimeout(() => {
         try {
-          localStorage.removeItem('lastVideoId');
+          localStorage.removeItem("lastVideoId");
         } catch {}
       }, 200);
     } else {
       try {
-        localStorage.removeItem('lastVideoId');
+        localStorage.removeItem("lastVideoId");
       } catch {}
     }
   }, [user, videos]);
 
-  // infinite scroll – append from pool
+  // infinite scroll – append
   useEffect(() => {
     const el = sliderRef.current;
     if (!el || allVideos.length === 0) return;
@@ -775,9 +746,8 @@ export default function VideoFeed() {
         setVideos((prev) => [...prev, ...allVideos]);
       }
     };
-    el.addEventListener('scroll', handleScrollDown);
-    return () =>
-      el.removeEventListener('scroll', handleScrollDown);
+    el.addEventListener("scroll", handleScrollDown);
+    return () => el.removeEventListener("scroll", handleScrollDown);
   }, [allVideos]);
 
   // infinite scroll – prepend
@@ -794,28 +764,27 @@ export default function VideoFeed() {
         el.scrollTop += addedHeight;
       }
     };
-    el.addEventListener('scroll', handleScrollUp);
-    return () =>
-      el.removeEventListener('scroll', handleScrollUp);
+    el.addEventListener("scroll", handleScrollUp);
+    return () => el.removeEventListener("scroll", handleScrollUp);
   }, [allVideos]);
 
   const handleSignOut = async () => {
     await auth.signOut();
     setDropdownOpen(false);
-    router.push('/');
+    router.push("/");
   };
 
   const handleLike = async (videoId: string) => {
-    if (!user) return alert('Sign in to like');
-    const refDoc = doc(db, 'videos', videoId, 'likes', user.uid!);
+    if (!user) return alert("Sign in to like");
+    const refDoc = doc(db, "videos", videoId, "likes", user.uid!);
     if (likesMap[videoId]) await deleteDoc(refDoc);
     else await setDoc(refDoc, { likedAt: Date.now(), userId: user.uid });
     setLikesMap((prev) => ({ ...prev, [videoId]: !prev[videoId] }));
   };
 
   const handleFollow = async (creatorId: string) => {
-    if (!user) return alert('Sign in to follow');
-    const refDoc = doc(db, 'users', creatorId, 'followers', user.uid!);
+    if (!user) return alert("Sign in to follow");
+    const refDoc = doc(db, "users", creatorId, "followers", user.uid!);
     if (followMap[creatorId]) await deleteDoc(refDoc);
     else
       await setDoc(refDoc, {
@@ -829,20 +798,20 @@ export default function VideoFeed() {
   };
 
   const handleDelete = async (videoId: string) => {
-    if (!confirm('Are you sure you want to delete this upload?')) return;
-    await deleteDoc(doc(db, 'videos', videoId));
+    if (!confirm("Are you sure you want to delete this upload?")) return;
+    await deleteDoc(doc(db, "videos", videoId));
     setVideos((prev) => prev.filter((v) => v.id !== videoId));
     setAllVideos((prev) => prev.filter((v) => v.id !== videoId));
 
     try {
-      await fetch('/api/algolia/deleteVideo', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      await fetch("/api/algolia/deleteVideo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id: videoId }),
       });
     } catch (e) {
       console.warn(
-        'Algolia delete failed (will disappear on next reindex):',
+        "Algolia delete failed (will disappear on next reindex):",
         e,
       );
     }
@@ -853,15 +822,13 @@ export default function VideoFeed() {
     return Math.round(el.scrollTop / h);
   };
 
-  // ---------- client-side search + filters wired to new fields ----------
-
+  // client-side search + filters
   const filteredVideos = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
 
     return videos.filter((v) => {
-      const provider = userProfiles[v.userId || ''];
+      const provider = userProfiles[v.userId || ""];
 
-      // 1) TEXT SEARCH
       if (term) {
         const haystack = [
           v.title,
@@ -875,7 +842,7 @@ export default function VideoFeed() {
           v.subcategoryLabel,
         ]
           .filter(Boolean)
-          .join(' ')
+          .join(" ")
           .toLowerCase();
 
         if (!haystack.includes(term)) {
@@ -883,61 +850,55 @@ export default function VideoFeed() {
         }
       }
 
-      // 2) CATEGORY filter (multi-select)
       if (filters.categories.length) {
-        const catId = (v.categoryId || '').toString() as
-          | CategoryId
-          | '';
+        const catId = (v.categoryId || "").toString() as CategoryId | "";
         if (!catId || !filters.categories.includes(catId as CategoryId)) {
           return false;
         }
       }
 
-      // 3) GENDER filter
-      if (filters.gender !== 'any') {
-        let videoGender = '';
+      if (filters.gender !== "any") {
+        let videoGender = "";
 
-        if (typeof v.targetGender === 'string') {
+        if (typeof v.targetGender === "string") {
           videoGender = v.targetGender.toLowerCase();
-        } else if (typeof provider?.targetGender === 'string') {
+        } else if (typeof provider?.targetGender === "string") {
           videoGender = provider.targetGender.toLowerCase();
-        } else if (typeof provider?.gender === 'string') {
+        } else if (typeof provider?.gender === "string") {
           videoGender = provider.gender.toLowerCase();
         }
 
         if (!videoGender) return false;
 
         const wanted = filters.gender.toLowerCase();
-        if (['male', 'female', 'unisex'].includes(videoGender)) {
+        if (["male", "female", "unisex"].includes(videoGender)) {
           if (videoGender !== wanted) return false;
         } else if (!videoGender.includes(wanted)) {
           return false;
         }
       }
 
-      // 4) AGE GROUP filter
-      if (filters.ageGroup !== 'any') {
-        let age = '';
+      if (filters.ageGroup !== "any") {
+        let age = "";
 
-        if (typeof v.targetAgeGroup === 'string') {
+        if (typeof v.targetAgeGroup === "string") {
           age = v.targetAgeGroup.toLowerCase();
-        } else if (typeof (v as any).ageGroup === 'string') {
+        } else if (typeof (v as any).ageGroup === "string") {
           age = (v as any).ageGroup.toLowerCase();
-        } else if (typeof provider?.targetAgeGroup === 'string') {
+        } else if (typeof provider?.targetAgeGroup === "string") {
           age = provider.targetAgeGroup.toLowerCase();
         }
 
         if (!age) return false;
 
         const wanted = filters.ageGroup.toLowerCase();
-        if (['kids', 'adults', 'all'].includes(age)) {
+        if (["kids", "adults", "all"].includes(age)) {
           if (age !== wanted) return false;
         } else if (!age.includes(wanted)) {
           return false;
         }
       }
 
-      // 5) HAIR COLOR filter (multi-select)
       if (filters.hairColors.length) {
         const vidColors = Array.isArray(v.hairColors) ? v.hairColors : [];
         if (
@@ -949,7 +910,6 @@ export default function VideoFeed() {
         }
       }
 
-      // 6) NAIL SHAPE filter (multi-select)
       if (filters.nailShapes.length) {
         const vidShapes = Array.isArray(v.nailShapes) ? v.nailShapes : [];
         if (
@@ -961,15 +921,13 @@ export default function VideoFeed() {
         }
       }
 
-      // 7) NAIL LENGTH filter
-      if (filters.nailLength !== 'any') {
-        const length = (v.nailLength || '').toString();
+      if (filters.nailLength !== "any") {
+        const length = (v.nailLength || "").toString();
         if (!length || length !== filters.nailLength) {
           return false;
         }
       }
 
-      // 8) LOCATION filter
       if (filters.location.trim()) {
         const needle = filters.location.trim().toLowerCase();
         const locFields = [
@@ -980,7 +938,7 @@ export default function VideoFeed() {
           provider?.county,
         ]
           .filter(Boolean)
-          .join(' ')
+          .join(" ")
           .toLowerCase();
 
         if (!locFields.includes(needle)) {
@@ -997,7 +955,7 @@ export default function VideoFeed() {
     if (!el || filteredVideos.length === 0) return;
     const h = el.clientHeight || window.innerHeight;
     const idx = getCurrentIndex(el);
-    el.scrollTo({ top: (idx + 1) * h, behavior: 'smooth' });
+    el.scrollTo({ top: (idx + 1) * h, behavior: "smooth" });
   };
 
   const scrollPrev = () => {
@@ -1005,7 +963,7 @@ export default function VideoFeed() {
     if (!el || filteredVideos.length === 0) return;
     const h = el.clientHeight || window.innerHeight;
     const idx = getCurrentIndex(el);
-    el.scrollTo({ top: (idx - 1) * h, behavior: 'smooth' });
+    el.scrollTo({ top: (idx - 1) * h, behavior: "smooth" });
   };
 
   const togglePlay = (e: React.MouseEvent<HTMLVideoElement>) => {
@@ -1013,7 +971,6 @@ export default function VideoFeed() {
     v.paused ? v.play().catch(() => {}) : v.pause();
   };
 
-  // NEW: open share modal for this post
   const handleShare = (video: VideoDoc) => {
     setShareVideo(video);
   };
@@ -1021,17 +978,15 @@ export default function VideoFeed() {
   const openAuthModal = () => {
     if (filteredVideos[currentIndex]) {
       try {
-        localStorage.setItem('lastVideoId', filteredVideos[currentIndex].id);
+        localStorage.setItem("lastVideoId", filteredVideos[currentIndex].id);
       } catch {}
     }
     setAuthDialogOpen(true);
   };
 
-  // carousel helpers
   const setMediaIndex = (postId: string, idx: number) =>
     setMediaIndexMap((prev) => ({ ...prev, [postId]: idx }));
 
-  // 🔎 trigger navigation to /search when user presses Enter or clicks icon
   const triggerSearch = () => {
     const q = searchTerm.trim();
     if (!q) return;
@@ -1040,37 +995,37 @@ export default function VideoFeed() {
 
   const handleClearFilters = () => {
     setFilters({
-      gender: 'any',
-      ageGroup: 'any',
-      location: '',
+      gender: "any",
+      ageGroup: "any",
+      location: "",
       categories: [],
       hairColors: [],
       nailShapes: [],
-      nailLength: 'any',
+      nailLength: "any",
     });
   };
 
   const handleClearSearchAndFilters = () => {
-    setSearchTerm('');
+    setSearchTerm("");
     handleClearFilters();
   };
 
   const anyFilterActive =
-    filters.gender !== 'any' ||
-    filters.ageGroup !== 'any' ||
+    filters.gender !== "any" ||
+    filters.ageGroup !== "any" ||
     filters.location.trim().length > 0 ||
     filters.categories.length > 0 ||
     filters.hairColors.length > 0 ||
     filters.nailShapes.length > 0 ||
-    filters.nailLength !== 'any' ||
+    filters.nailLength !== "any" ||
     searchTerm.trim().length > 0;
 
   const handleOpenBookingFromNotification = (n: UserNotification) => {
     if (!n.bookingId) return;
     const basePath =
-      isProvider || n.role === 'provider'
-        ? '/creator/bookings'
-        : '/bookings';
+      isProvider || n.role === "provider"
+        ? "/creator/bookings"
+        : "/bookings";
 
     router.push(`${basePath}?bookingId=${encodeURIComponent(n.bookingId)}`);
     setNotificationsOpen(false);
@@ -1082,42 +1037,39 @@ export default function VideoFeed() {
       <div
         className="absolute right-3 z-50 flex items-center space-x-2"
         style={{
-          top: 'calc(env(safe-area-inset-top, 0px) + 0.75rem)',
+          top: "calc(env(safe-area-inset-top, 0px) + 0.75rem)",
         }}
       >
         {/* Inline search */}
         <div
           className={`flex items-center transition-all duration-300 ${
-            searchOpen ? 'w-64 sm:w-80' : 'w-8'
+            searchOpen ? "w-64 sm:w-80" : "w-8"
           }`}
         >
-          {/* Search / close icon */}
           <button
             type="button"
             onClick={() => {
               if (searchOpen && searchTerm.trim()) {
-                // run full search page
                 triggerSearch();
               } else {
                 const next = !searchOpen;
                 setSearchOpen(next);
-                if (!next) setSearchTerm('');
+                if (!next) setSearchTerm("");
               }
             }}
             className="h-8 w-8 flex items-center justify-center text-white hover:text-gray-300 transition"
-            aria-label={searchOpen ? 'Close search' : 'Open search'}
+            aria-label={searchOpen ? "Close search" : "Open search"}
           >
             {searchOpen ? <FaTimes /> : <FaSearch />}
           </button>
 
-          {/* Expanding input */}
           {searchOpen && (
             <input
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') {
+                if (e.key === "Enter") {
                   e.preventDefault();
                   triggerSearch();
                 }
@@ -1128,7 +1080,7 @@ export default function VideoFeed() {
           )}
         </div>
 
-        {/* Filter icon (no background) */}
+        {/* Filter icon */}
         <button
           type="button"
           onClick={() => setFiltersOpen((prev) => !prev)}
@@ -1138,14 +1090,13 @@ export default function VideoFeed() {
           <FaSlidersH />
         </button>
 
-        {/* Avatar / menu with attention dot – plain user icon */}
+        {/* Avatar / menu */}
         <div className="relative">
           <button
             onClick={() => setDropdownOpen(!dropdownOpen)}
             className="focus:outline-none relative h-8 w-8 flex items-center justify-center"
           >
             <FaUser className="w-5 h-5" />
-
             {hasAnyAttentionDot && (
               <span className="absolute -top-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-400 border border-black" />
             )}
@@ -1170,7 +1121,6 @@ export default function VideoFeed() {
                     <span className="font-semibold truncate">@{username}</span>
                   </div>
 
-                  {/* Notifications entry */}
                   <button
                     onClick={() => {
                       setNotificationsOpen(true);
@@ -1184,15 +1134,14 @@ export default function VideoFeed() {
                     </span>
                     {unreadCount > 0 && (
                       <span className="ml-2 inline-flex items-center justify-center h-4 min-w-[16px] rounded-full bg-green-500 text-[10px] font-semibold px-1">
-                        {unreadCount > 9 ? '9+' : unreadCount}
+                        {unreadCount > 9 ? "9+" : unreadCount}
                       </span>
                     )}
                   </button>
 
-                  {/* Messages entry */}
                   <button
                     onClick={() => {
-                      router.push('/messages');
+                      router.push("/messages");
                       setDropdownOpen(false);
                     }}
                     className="block w-full px-2 py-1 hover:bg-gray-700 rounded mb-1 flex items-center justify-between"
@@ -1205,9 +1154,9 @@ export default function VideoFeed() {
                       <span className="ml-2 inline-flex items-center justify-center h-4 min-w-[16px] rounded-full bg-green-400 text-[10px] font-semibold px-1">
                         {unreadMessagesCount > 1
                           ? unreadMessagesCount > 9
-                            ? '9+'
+                            ? "9+"
                             : unreadMessagesCount
-                          : ''}
+                          : ""}
                       </span>
                     )}
                   </button>
@@ -1216,7 +1165,7 @@ export default function VideoFeed() {
                     <>
                       <button
                         onClick={() => {
-                          router.push('/upload');
+                          router.push("/upload");
                           setDropdownOpen(false);
                         }}
                         className="block w-full px-2 py-1 hover:bg-gray-700 rounded mb-1"
@@ -1225,7 +1174,7 @@ export default function VideoFeed() {
                       </button>
                       <button
                         onClick={() => {
-                          router.push('/provider/dashboard');
+                          router.push("/provider/dashboard");
                           setDropdownOpen(false);
                         }}
                         className="block w-full px-2 py-1 hover:bg-gray-700 rounded mb-1"
@@ -1235,7 +1184,7 @@ export default function VideoFeed() {
 
                       <button
                         onClick={() => {
-                          router.push('/creator/bookings');
+                          router.push("/creator/bookings");
                           setDropdownOpen(false);
                         }}
                         className="block w-full px-2 py-1 hover:bg-gray-700 rounded mb-1"
@@ -1244,7 +1193,7 @@ export default function VideoFeed() {
                       </button>
                       <button
                         onClick={() => {
-                          router.push('/bookings');
+                          router.push("/bookings");
                           setDropdownOpen(false);
                         }}
                         className="block w-full px-2 py-1 hover:bg-gray-700 rounded mb-1"
@@ -1253,7 +1202,7 @@ export default function VideoFeed() {
                       </button>
                       <button
                         onClick={() => {
-                          router.push('/wallet');
+                          router.push("/wallet");
                           setDropdownOpen(false);
                         }}
                         className="block w-full px-2 py-1 hover:bg-gray-700 rounded mb-1"
@@ -1267,7 +1216,7 @@ export default function VideoFeed() {
                     <>
                       <button
                         onClick={() => {
-                          router.push('/bookings');
+                          router.push("/bookings");
                           setDropdownOpen(false);
                         }}
                         className="block w-full px-2 py-1 hover:bg-gray-700 rounded mb-1"
@@ -1276,7 +1225,7 @@ export default function VideoFeed() {
                       </button>
                       <button
                         onClick={() => {
-                          router.push('/wallet');
+                          router.push("/wallet");
                           setDropdownOpen(false);
                         }}
                         className="block w-full px-2 py-1 hover:bg-gray-700 rounded mb-1"
@@ -1288,7 +1237,7 @@ export default function VideoFeed() {
 
                   <button
                     onClick={() => {
-                      router.push('/profile');
+                      router.push("/profile");
                       setDropdownOpen(false);
                     }}
                     className="block w-full px-2 py-1 hover:bg-gray-700 rounded mb-1"
@@ -1316,12 +1265,12 @@ export default function VideoFeed() {
         </div>
       </div>
 
-      {/* Clear search/filters pill (top-left) */}
+      {/* Clear search / filters pill */}
       {anyFilterActive && (
         <div
           className="absolute left-3 z-50"
           style={{
-            top: 'calc(env(safe-area-inset-top, 0px) + 0.75rem)',
+            top: "calc(env(safe-area-inset-top, 0px) + 0.75rem)",
           }}
         >
           <button
@@ -1335,7 +1284,6 @@ export default function VideoFeed() {
         </div>
       )}
 
-      {/* Filters dropdown */}
       <ServiceFiltersDropdown
         open={filtersOpen}
         value={filters}
@@ -1344,18 +1292,17 @@ export default function VideoFeed() {
         onClear={handleClearFilters}
       />
 
-      {/* 🔔 Notifications modal */}
+      {/* Notifications modal */}
       {notificationsOpen && (
         <div className="fixed inset-0 z-[9998] bg-black/70 flex items-center justify-center">
           <div className="bg-neutral-900 text-white rounded-xl shadow-xl w-[90vw] max-w-md max-h-[85vh] flex flex-col overflow-hidden">
-            {/* header */}
             <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
               <div className="flex items-center gap-2">
                 <FaBell className="text-sm" />
                 <h2 className="text-sm font-semibold">Notifications</h2>
                 {unreadCount > 0 && (
                   <span className="ml-1 inline-flex items-center justify-center min-w-[18px] h-4 px-1 rounded-full bg-green-500 text-[10px] font-semibold">
-                    {unreadCount > 9 ? '9+' : unreadCount}
+                    {unreadCount > 9 ? "9+" : unreadCount}
                   </span>
                 )}
               </div>
@@ -1369,11 +1316,10 @@ export default function VideoFeed() {
               </button>
             </div>
 
-            {/* list */}
             <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2">
               {notifications.length === 0 && (
                 <div className="text-xs text-gray-400 text-center py-6">
-                  You don't have any notifications yet.
+                  You don&apos;t have any notifications yet.
                 </div>
               )}
 
@@ -1387,14 +1333,14 @@ export default function VideoFeed() {
                   <div
                     key={n.id}
                     className={`rounded-lg border border-white/10 px-3 py-2 text-xs sm:text-sm cursor-pointer transition ${
-                      isUnread ? 'bg-white/10' : 'bg-transparent'
+                      isUnread ? "bg-white/10" : "bg-transparent"
                     }`}
                     onClick={() => handleOpenBookingFromNotification(n)}
                   >
                     <div className="flex items-center justify-between gap-2">
                       <p
                         className={`truncate ${
-                          isUnread ? 'font-semibold' : 'font-normal'
+                          isUnread ? "font-semibold" : "font-normal"
                         }`}
                       >
                         {title}
@@ -1432,12 +1378,11 @@ export default function VideoFeed() {
               })}
             </div>
 
-            {/* footer */}
             <div className="border-t border-white/10 px-4 py-3 flex justify-between gap-2">
               <button
                 type="button"
                 onClick={() => {
-                  router.push('/notifications');
+                  router.push("/notifications");
                   setNotificationsOpen(false);
                 }}
                 className="flex-1 text-xs sm:text-sm px-3 py-2 rounded-full bg-white text-black font-semibold hover:bg-gray-200"
@@ -1462,13 +1407,13 @@ export default function VideoFeed() {
         className="h-screen min-h-[100dvh] overflow-y-scroll snap-y snap-mandatory scroll-smooth [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]"
       >
         {filteredVideos.map((v, i) => {
-          const up = userProfiles[v.userId || ''] || {};
+          const up = userProfiles[v.userId || ""] || {};
           const liked = likesMap[v.id];
           const followed = up && user ? followMap[v.userId!] : false;
           const isOwner = v.userId === user?.uid;
 
           const displayedPrice =
-            typeof v.serviceCost === 'number'
+            typeof v.serviceCost === "number"
               ? applyMarkup(v.serviceCost, markupConfig)
               : null;
 
@@ -1477,7 +1422,6 @@ export default function VideoFeed() {
           const activeIdx = mediaIndexMap[v.id] ?? 0;
           const active = media[activeIdx] || media[0];
 
-          // Handles for this creator
           const personalHandle = normalizeHandle(
             up.personalUsername || up.username,
           );
@@ -1485,26 +1429,24 @@ export default function VideoFeed() {
             up.businessUsername || personalHandle,
           );
 
-          // Pretty URL: /{businessHandle} for businesses, /u/{handle} for personal-only
           const creatorUrl = businessHandle
             ? `/${businessHandle}`
             : personalHandle
             ? `/u/${personalHandle}`
             : v.userId
             ? `/creator/${v.userId}`
-            : '/';
+            : "/";
 
           return (
             <div
               key={`${v.id}-${i}`}
               className="relative h-screen min-h-[100dvh] flex items-center justify-center snap-start"
             >
-              {/* Stack badge */}
               {hasCarousel && (
                 <div
                   className="absolute right-3 z-50"
                   style={{
-                    top: 'calc(env(safe-area-inset-top, 0px) + 0.75rem)',
+                    top: "calc(env(safe-area-inset-top, 0px) + 0.75rem)",
                   }}
                 >
                   <div className="bg-black/70 text-white rounded-full p-2 flex items-center justify-center">
@@ -1513,7 +1455,6 @@ export default function VideoFeed() {
                 </div>
               )}
 
-              {/* Media viewer with swipe handlers */}
               <div
                 className="relative max-h-screen max-w-full z-40"
                 onTouchStart={(e) => {
@@ -1547,11 +1488,11 @@ export default function VideoFeed() {
                   delete touchStartYRef.current[v.id];
                 }}
               >
-                {active?.type === 'image' ||
+                {active?.type === "image" ||
                 (active && isImageUrl(active.url)) ? (
                   <img
                     src={active.url}
-                    alt={v.title || 'service image'}
+                    alt={v.title || "service image"}
                     className="max-h-screen max-w-full object-contain select-none"
                     draggable={false}
                   />
@@ -1568,7 +1509,6 @@ export default function VideoFeed() {
                 )}
               </div>
 
-              {/* Carousel arrows */}
               {hasCarousel && (
                 <>
                   <button
@@ -1595,19 +1535,18 @@ export default function VideoFeed() {
                     <FaChevronRight />
                   </button>
 
-                  {/* Dots indicator */}
                   <div
                     className="absolute left-1/2 -translate-x-1/2 z-50 flex space-x-1"
                     style={{
                       bottom:
-                        'calc(env(safe-area-inset-bottom, 0px) + 0.75rem)',
+                        "calc(env(safe-area-inset-bottom, 0px) + 0.75rem)",
                     }}
                   >
                     {media.map((_, idx) => (
                       <span
                         key={idx}
                         className={`h-2 w-2 rounded-full ${
-                          idx === activeIdx ? 'bg-white' : 'bg-white/40'
+                          idx === activeIdx ? "bg-white" : "bg-white/40"
                         }`}
                       />
                     ))}
@@ -1615,19 +1554,17 @@ export default function VideoFeed() {
                 </>
               )}
 
-              {/* Creator pill */}
               <div
                 onClick={() => router.push(creatorUrl)}
                 className="absolute left-3 bg-black/70 px-1 py-0.5 rounded-md cursor-pointer hover:bg-black/90 transition text-xs font-semibold text-white z-50 flex items-center gap-2"
                 style={{
-                  top: 'calc(env(safe-area-inset-top, 0px) + 0.75rem)',
+                  top: "calc(env(safe-area-inset-top, 0px) + 0.75rem)",
                 }}
               >
-                {/* Business avatar on feed */}
                 {up.businessProfilePhoto ? (
                   <img
                     src={up.businessProfilePhoto}
-                    alt={up.businessName || 'business'}
+                    alt={up.businessName || "business"}
                     className="w-6 h-6 rounded-full object-cover border border-white/40"
                   />
                 ) : null}
@@ -1638,16 +1575,15 @@ export default function VideoFeed() {
                     ? `@${businessHandle}`
                     : personalHandle
                     ? `@${personalHandle}`
-                    : '@unknown'}
+                    : "@unknown"}
                 </span>
               </div>
 
-              {/* Actions – aligned to right & lifted above bottom safe area */}
               <div
                 className="pointer-events-auto absolute right-3 flex flex-col items-end space-y-3 z-50"
                 style={{
                   bottom:
-                    'calc(env(safe-area-inset-bottom, 0px) + 1.5rem)',
+                    "calc(env(safe-area-inset-bottom, 0px) + 1.5rem)",
                 }}
               >
                 <button onClick={() => handleLike(v.id)} className="text-xl">
@@ -1685,7 +1621,6 @@ export default function VideoFeed() {
                 </button>
               </div>
 
-              {/* Owner controls */}
               {isOwner && (
                 <div className="absolute top-16 right-3 flex flex-col space-y-1 z-50">
                   <button
@@ -1703,20 +1638,23 @@ export default function VideoFeed() {
                 </div>
               )}
 
-              {/* Text + Price */}
               {(v.title || v.description || displayedPrice !== null) && (
                 <div
                   className="absolute left-3 max-w-[60%] overflow-hidden text-ellipsis z-50"
                   style={{
                     bottom:
-                      'calc(env(safe-area-inset-bottom, 0px) + 1.5rem)',
+                      "calc(env(safe-area-inset-bottom, 0px) + 1.5rem)",
                   }}
                 >
                   {v.title && (
-                    <h3 className="text-sm font-bold text-white">{v.title}</h3>
+                    <h3 className="text-sm font-bold text-white">
+                      {v.title}
+                    </h3>
                   )}
                   {v.description && (
-                    <p className="text-xs text-gray-200">{v.description}</p>
+                    <p className="text-xs text-gray-200">
+                      {v.description}
+                    </p>
                   )}
                   {displayedPrice !== null && (
                     <div className="mt-2">
@@ -1774,7 +1712,6 @@ export default function VideoFeed() {
         />
       )}
 
-      {/* NEW: Post share modal */}
       {shareVideo && (
         <PostShareModal
           video={shareVideo}
@@ -1787,9 +1724,8 @@ export default function VideoFeed() {
 }
 
 /* -------------------------------------------------------
- * Post Share Modal – YouTube-style with more networks
- * Now uses a dedicated /s share URL that carries
- * title/description/image in the query for OG previews.
+ * Post Share Modal – YouTube-style sheet
+ * We now share ONLY the clean /video/:id URL (no /s link).
  * ----------------------------------------------------- */
 
 function PostShareModal({
@@ -1801,66 +1737,41 @@ function PostShareModal({
   creatorProfile: UserProfile | null;
   onClose: () => void;
 }) {
-  // Simple preview: first media item (used for both UI and OG)
-  const preview: MediaItem | null = (() => {
-    if (video.media && video.media.length > 0) return video.media[0];
-    if (video.url) {
-      const base = video.url.split('?')[0].toLowerCase();
-      const isImg =
-        /\.(png|jpe?g|gif|webp|avif|bmp)$/.test(base) ||
-        base.startsWith('data:image');
-      return { url: video.url, type: isImg ? 'image' : 'video' };
-    }
-    return null;
-  })();
+  const url =
+    typeof window !== "undefined"
+      ? `${window.location.origin}/video/${video.id}`
+      : "";
 
   const creatorName =
     creatorProfile?.businessName ||
     creatorProfile?.username ||
     creatorProfile?.personalUsername ||
     creatorProfile?.businessUsername ||
-    'this provider';
+    "this provider";
 
-  // Base site origin (works on client + respects NEXT_PUBLIC_SITE_URL on server)
-  const origin =
-    typeof window !== 'undefined'
-      ? window.location.origin
-      : process.env.NEXT_PUBLIC_SITE_URL || 'https://vextup.com';
-
-  // Build share URL that encodes the info we want to surface in OG tags.
-  const params = new URLSearchParams();
-  params.set('id', video.id);
-  if (video.title) params.set('title', video.title);
-  if (video.description) params.set('desc', video.description);
-  if (preview?.url) params.set('image', preview.url);
-
-  // This /s route is where we attach OpenGraph/Twitter metadata.
-  const shareUrl = `${origin}/s?${params.toString()}`;
-
-  const shareText = `Book this service on VextUp from ${creatorName} – see details, pricing and reserve a slot instantly here: ${shareUrl}`;
+  const shareText = `Book this service on VextUp from ${creatorName} – see details, pricing and reserve a slot instantly here: ${url}`;
 
   const copyTextAndNotify = async (message?: string) => {
     try {
       await navigator.clipboard.writeText(message ?? shareText);
-      alert('Share text copied to clipboard!');
+      alert("Share text copied to clipboard!");
     } catch (err) {
-      console.error('copy failed', err);
-      alert('Could not copy text.');
+      console.error("copy failed", err);
+      alert("Could not copy text.");
     }
   };
 
   const copyLinkOnly = async () => {
     try {
-      await navigator.clipboard.writeText(shareUrl);
-      alert('Post link copied to clipboard!');
+      await navigator.clipboard.writeText(url);
     } catch (err) {
-      console.error('copy failed', err);
-      alert('Could not copy link.');
+      console.error("copy failed", err);
+      alert("Could not copy link.");
     }
   };
 
-  const openWindow = (url: string) => {
-    window.open(url, '_blank', 'noopener,noreferrer');
+  const openWindow = (shareUrl: string) => {
+    window.open(shareUrl, "_blank", "noopener,noreferrer");
   };
 
   const handleWhatsapp = () => {
@@ -1870,7 +1781,7 @@ function PostShareModal({
   const handleFacebook = () => {
     openWindow(
       `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(
-        shareUrl,
+        url,
       )}&quote=${encodeURIComponent(shareText)}`,
     );
   };
@@ -1885,20 +1796,32 @@ function PostShareModal({
 
   const handleEmail = () => {
     window.location.href = `mailto:?subject=${encodeURIComponent(
-      'Check out this VextUp service',
+      "Check out this VextUp service",
     )}&body=${encodeURIComponent(shareText)}`;
   };
 
-  // Instagram & TikTok: copy caption + open app/site so user can paste
+  // Instagram & TikTok: copy caption + open app/site
   const handleInstagram = async () => {
     await copyTextAndNotify();
-    openWindow('https://www.instagram.com/');
+    openWindow("https://www.instagram.com/");
   };
 
   const handleTiktok = async () => {
     await copyTextAndNotify();
-    openWindow('https://www.tiktok.com/');
+    openWindow("https://www.tiktok.com/");
   };
+
+  const preview: MediaItem | null = (() => {
+    if (video.media && video.media.length > 0) return video.media[0];
+    if (video.url) {
+      const base = video.url.split("?")[0].toLowerCase();
+      const isImg =
+        /\.(png|jpe?g|gif|webp|avif|bmp)$/.test(base) ||
+        base.startsWith("data:image");
+      return { url: video.url, type: isImg ? "image" : "video" };
+    }
+    return null;
+  })();
 
   return (
     <div className="fixed inset-0 z-[9999] bg-black/70 flex items-center justify-center">
@@ -1920,10 +1843,10 @@ function PostShareModal({
         <div className="flex items-center gap-3 mb-4">
           <div className="w-16 h-16 rounded-md overflow-hidden bg-gray-100 flex items-center justify-center">
             {preview ? (
-              preview.type === 'image' ? (
+              preview.type === "image" ? (
                 <img
                   src={preview.url}
-                  alt={video.title || 'service preview'}
+                  alt={video.title || "service preview"}
                   className="w-full h-full object-cover"
                 />
               ) : (
@@ -2058,15 +1981,10 @@ function PostShareModal({
           </div>
 
           <p className="text-[11px] text-gray-500">
-            WhatsApp, Facebook, X and others use the link&apos;s preview
-            information (Open Graph) from the VextUp share page at{' '}
-            <code className="text-[10px] bg-gray-100 px-1 rounded">
-              /s
-            </code>
-            . That page uses the thumbnail and details above so people can see
-            what&apos;s being shared before they open it. For Instagram and
-            TikTok, we copy the message to your clipboard and open their
-            site/app so you can paste it into a post, story or DM.
+            Messaging apps generate the thumbnail from the page you share.
+            For image-based posts they can show the first image; for pure videos
+            they may still show a generic preview unless we later add a separate
+            thumbnail image.
           </p>
         </div>
       </div>
