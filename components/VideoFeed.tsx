@@ -64,7 +64,9 @@ import {
 
 type CategoryId = (typeof SERVICE_CATEGORIES)[number]["id"];
 
-import ServiceFiltersDropdown, { type FeedFilters } from "./ServiceFiltersDropdown";
+import ServiceFiltersDropdown, {
+  type FeedFilters,
+} from "./ServiceFiltersDropdown";
 
 // ---------- markup config (tiered) ----------
 interface MarkupTier {
@@ -1724,8 +1726,7 @@ export default function VideoFeed() {
 }
 
 /* -------------------------------------------------------
- * Post Share Modal – YouTube-style sheet
- * We now share ONLY the clean /video/:id URL (no /s link).
+ * Post Share Modal – YouTube-style sheet + curated caption
  * ----------------------------------------------------- */
 
 function PostShareModal({
@@ -1742,14 +1743,18 @@ function PostShareModal({
       ? `${window.location.origin}/video/${video.id}`
       : "";
 
-  const creatorName =
+  const displayName =
     creatorProfile?.businessName ||
     creatorProfile?.username ||
     creatorProfile?.personalUsername ||
     creatorProfile?.businessUsername ||
     "this provider";
 
-  const shareText = `Book this service on VextUp from ${creatorName} – see details, pricing and reserve a slot instantly here: ${url}`;
+  const avatarUrl =
+    creatorProfile?.businessProfilePhoto || creatorProfile?.profilePhoto;
+
+  // Business-voice caption, similar to profile share
+  const shareText = `Check out ${displayName} on VextUp – see the services they offer, view their work and book directly here: ${url}`;
 
   const copyTextAndNotify = async (message?: string) => {
     try {
@@ -1764,6 +1769,7 @@ function PostShareModal({
   const copyLinkOnly = async () => {
     try {
       await navigator.clipboard.writeText(url);
+      alert("Link copied to clipboard!");
     } catch (err) {
       console.error("copy failed", err);
       alert("Could not copy link.");
@@ -1796,7 +1802,7 @@ function PostShareModal({
 
   const handleEmail = () => {
     window.location.href = `mailto:?subject=${encodeURIComponent(
-      "Check out this VextUp service",
+      `Check out ${displayName} on VextUp`,
     )}&body=${encodeURIComponent(shareText)}`;
   };
 
@@ -1839,7 +1845,28 @@ function PostShareModal({
           </button>
         </div>
 
-        {/* Post preview */}
+        {/* Business preview card with avatar + name + link */}
+        <div className="flex items-center gap-3 mb-3 border rounded-lg p-2 bg-gray-50">
+          {avatarUrl ? (
+            <img
+              src={avatarUrl}
+              alt={displayName}
+              className="w-10 h-10 rounded-full object-cover"
+            />
+          ) : (
+            <div className="w-10 h-10 rounded-full bg-gray-300" />
+          )}
+          <div className="text-xs">
+            <div className="font-semibold text-gray-900">{displayName}</div>
+            <div className="text-gray-600 truncate max-w-[210px]">
+              See the services they offer, view their work and book directly on
+              VextUp.
+            </div>
+            <div className="text-[10px] text-blue-600 truncate">{url}</div>
+          </div>
+        </div>
+
+        {/* Post preview (thumbnail style) */}
         <div className="flex items-center gap-3 mb-4">
           <div className="w-16 h-16 rounded-md overflow-hidden bg-gray-100 flex items-center justify-center">
             {preview ? (
@@ -1874,10 +1901,6 @@ function PostShareModal({
                 {video.description}
               </p>
             )}
-            <p className="text-[11px] text-gray-600 mt-1">
-              From <span className="font-medium">{creatorName}</span> on
-              VextUp.
-            </p>
           </div>
         </div>
 
@@ -1981,10 +2004,9 @@ function PostShareModal({
           </div>
 
           <p className="text-[11px] text-gray-500">
-            Messaging apps generate the thumbnail from the page you share.
-            For image-based posts they can show the first image; for pure videos
-            they may still show a generic preview unless we later add a separate
-            thumbnail image.
+            On Instagram and TikTok, we copy this message to your clipboard and
+            open their site. Paste it into a post, story, or DM so people can
+            tap the link and see your services, work and booking options.
           </p>
         </div>
       </div>

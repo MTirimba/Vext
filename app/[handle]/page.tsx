@@ -544,6 +544,7 @@ export default function BusinessHandlePage() {
   };
 
   // ---------- render states ----------
+
   if (!handle) {
     return (
       <p className="text-center mt-20 text-gray-500">
@@ -586,6 +587,7 @@ export default function BusinessHandlePage() {
     typeof window !== 'undefined' ? window.location.href : '';
 
   // ---------- main UI ----------
+
   return (
     <div className="min-h-screen bg-white relative">
       {/* Home icon – top-left, no background */}
@@ -1091,7 +1093,7 @@ export default function BusinessHandlePage() {
 }
 
 /* -------------------------------------------------------
- * Profile Share Modal – same logic as VideoFeed share
+ * Profile Share Modal – provider-voice caption + preview
  * ----------------------------------------------------- */
 
 interface ProfileShareModalProps {
@@ -1107,13 +1109,14 @@ function ProfileShareModal({
   onClose,
   profileUrl,
   displayName,
+  avatarUrl,
 }: ProfileShareModalProps) {
   if (!open) return null;
 
   const url = profileUrl || '';
 
-  // Curated caption used everywhere (mirrors VideoFeed style)
-  const shareText = `Check out ${displayName} on VextUp – see the services they offer, view their work and book directly here: ${url}`;
+  // Provider-voice caption used everywhere
+  const shareText = `Check out ${displayName} on VextUp – see the services we offer, view our work and book directly here: ${url}`;
 
   const copyLinkAndNotify = async (message?: string) => {
     try {
@@ -1186,6 +1189,27 @@ function ProfileShareModal({
           >
             Close
           </button>
+        </div>
+
+        {/* Preview-style card using avatar + business name */}
+        <div className="flex items-center gap-3 mb-4 border rounded-lg p-2 bg-gray-50">
+          {avatarUrl ? (
+            <img
+              src={avatarUrl}
+              alt={displayName}
+              className="w-10 h-10 rounded-full object-cover"
+            />
+          ) : (
+            <div className="w-10 h-10 rounded-full bg-gray-300" />
+          )}
+          <div className="text-xs">
+            <div className="font-semibold text-gray-900">{displayName}</div>
+            <div className="text-gray-600 truncate max-w-[210px]">
+              See the services we offer, view our work and book directly on
+              VextUp.
+            </div>
+            <div className="text-[10px] text-blue-600 truncate">{url}</div>
+          </div>
         </div>
 
         <div className="space-y-4 text-sm">

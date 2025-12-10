@@ -1,3 +1,4 @@
+// /workspaces/Vext/components/PostFeedModal.tsx
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -13,6 +14,14 @@ import {
   FiMoreHorizontal,
   FiX,
 } from 'react-icons/fi';
+import {
+  FaWhatsapp,
+  FaFacebook,
+  FaTwitter,
+  FaEnvelope,
+  FaInstagram,
+} from 'react-icons/fa';
+import { SiTiktok } from 'react-icons/si';
 import { DEFAULT_MARKUP_TIERS, MarkupTier } from '@/lib/pricing';
 
 type MediaItem = { url: string; type: 'image' | 'video' };
@@ -41,6 +50,7 @@ export interface CreatorProfile {
   fullName?: string;
   businessName?: string;
   profilePhoto?: string;
+  businessProfilePhoto?: string; // for business avatar
 
   street?: string;
   building?: string;
@@ -87,12 +97,14 @@ function firstMedia(v: VideoDoc): MediaItem | null {
 }
 
 // 💰 Helper: compute client-facing price from a base using markup tiers
-function priceWithMarkup(base: number, tiers: MarkupTier[] = DEFAULT_MARKUP_TIERS): number | null {
+function priceWithMarkup(
+  base: number,
+  tiers: MarkupTier[] = DEFAULT_MARKUP_TIERS,
+): number | null {
   if (!Number.isFinite(base) || base <= 0) return null;
   const tier =
-    tiers.find(
-      (t) => base >= t.min && (t.max == null || base < t.max),
-    ) || tiers[tiers.length - 1];
+    tiers.find((t) => base >= t.min && (t.max == null || base < t.max)) ||
+    tiers[tiers.length - 1];
 
   const percent = tier?.percent ?? 0;
   const multiplier = 1 + percent / 100;
@@ -113,6 +125,7 @@ export function PostFeedModal({
   const [user] = useAuthState(auth);
   const [bookingFor, setBookingFor] = useState<VideoDoc | null>(null);
   const [commentForId, setCommentForId] = useState<string | null>(null);
+  const [shareFor, setShareFor] = useState<VideoDoc | null>(null);
 
   // ----- scrolling infra
   const scrollerRef = useRef<HTMLDivElement | null>(null);
@@ -139,7 +152,7 @@ export function PostFeedModal({
     return () => clearTimeout(t0);
   }, [startVideoId, videos.length]);
 
-  // ----- like state (same as VideoFeed)
+  // ----- like state (same as VideoFeed; uses same Firestore subcollection)
   const [likesMap, setLikesMap] = useState<Record<string, boolean>>({});
   useEffect(() => {
     (async () => {
@@ -165,15 +178,6 @@ export function PostFeedModal({
     }
   };
 
-  // Share (same pattern as VideoFeed)
-  const handleShare = (videoId: string) => {
-    const link = `${window.location.origin}/video/${videoId}`;
-    navigator.clipboard.writeText(link).then(
-      () => alert('Link copied to clipboard!'),
-      () => alert('❌ Could not copy link'),
-    );
-  };
-
   // ✅ Use tiered markup instead of flat +10%
   const clientDisplayPrice = (v: VideoDoc) =>
     typeof v.serviceCost === 'number'
@@ -191,6 +195,16 @@ export function PostFeedModal({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
+
+  const displayName =
+    creatorProfile?.businessName ||
+    creatorProfile?.fullName ||
+    (creatorProfile?.username
+      ? `@${creatorProfile.username}`
+      : 'this creator');
+
+  const avatarUrl =
+    creatorProfile?.businessProfilePhoto || creatorProfile?.profilePhoto;
 
   return (
     <div
@@ -300,7 +314,7 @@ export function PostFeedModal({
                   </button>
                 </div>
 
-                {/* actions (like / comment / share) — same behavior as VideoFeed */}
+                {/* actions (like / comment / share) — shared behavior with VideoFeed */}
                 <div className="px-4 pb-4 pt-1 border-t">
                   <div className="flex items-center gap-5 text-gray-700">
                     <button
@@ -321,7 +335,7 @@ export function PostFeedModal({
                       <span className="text-sm">Comment</span>
                     </button>
                     <button
-                      onClick={() => handleShare(v.id)}
+                      onClick={() => setShareFor(v)}
                       className="flex items-center gap-1 hover:opacity-75"
                       aria-label="Share"
                     >
@@ -350,6 +364,255 @@ export function PostFeedModal({
           onClose={() => setCommentForId(null)}
         />
       )}
+
+      {shareFor && (
+        <PostShareModal
+          video={shareFor}
+          creatorProfile={creatorProfile}
+          onClose={() => setShareFor(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/* -------------------------------------------------------
+ * Post share modal – provider-voice caption + preview card
+ * ----------------------------------------------------- */
+
+function PostShareModal({
+  video,
+  creatorProfile,
+  onClose,
+}: {
+  video: VideoDoc;
+  creatorProfile?: CreatorProfile;
+  onClose: () => void;
+}) {
+  const origin =
+    typeof window !== 'undefined' ? window.location.origin : '';
+  const videoUrl = origin && video.id ? `${origin}/video/${video.id}` : '';
+
+  const displayName =
+    creatorProfile?.businessName ||
+    creatorProfile?.fullName ||
+    (creatorProfile?.username
+      ? `@${creatorProfile.username}`
+      : 'this creator');
+
+  const avatarUrl =
+    creatorProfile?.businessProfilePhoto || creatorProfile?.profilePhoto;
+
+  // Provider-voice caption
+  const shareText = `Check out ${displayName} on VextUp – see the services we offer, view our work and book directly here: ${videoUrl}`;
+
+  const copyText = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      alert('Share text copied to clipboard!');
+    } catch (err) {
+      console.error('copy failed', err);
+      alert('Could not copy text.');
+    }
+  };
+
+  const copyLinkOnly = async () => {
+    try {
+      await navigator.clipboard.writeText(videoUrl);
+      alert('Link copied to clipboard!');
+    } catch (err) {
+      console.error('copy failed', err);
+      alert('Could not copy link.');
+    }
+  };
+
+  const openWindow = (url: string) => {
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
+  const handleWhatsapp = () => {
+    openWindow(`https://wa.me/?text=${encodeURIComponent(shareText)}`);
+  };
+
+  const handleFacebook = () => {
+    openWindow(
+      `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(
+        videoUrl,
+      )}&quote=${encodeURIComponent(shareText)}`,
+    );
+  };
+
+  const handleTwitter = () => {
+    openWindow(
+      `https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}`,
+    );
+  };
+
+  const handleEmail = () => {
+    window.location.href = `mailto:?subject=${encodeURIComponent(
+      `Check out ${displayName} on VextUp`,
+    )}&body=${encodeURIComponent(shareText)}`;
+  };
+
+  const handleInstagram = async () => {
+    await copyText(shareText);
+    openWindow('https://www.instagram.com/');
+  };
+
+  const handleTiktok = async () => {
+    await copyText(shareText);
+    openWindow('https://www.tiktok.com/');
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-[10000] bg-black/60 flex items-center justify-center"
+      onClick={onClose}
+    >
+      <div
+        className="bg-white rounded-lg shadow-xl w-[95vw] max-w-md p-5"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-semibold">Share service</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-xs text-gray-500 hover:text-gray-800"
+          >
+            Close
+          </button>
+        </div>
+
+        {/* Preview card with business avatar + name + link */}
+        <div className="flex items-center gap-3 mb-4 border rounded-lg p-2 bg-gray-50">
+          {avatarUrl ? (
+            <img
+              src={avatarUrl}
+              alt={displayName}
+              className="w-10 h-10 rounded-full object-cover"
+            />
+          ) : (
+            <div className="w-10 h-10 rounded-full bg-gray-300" />
+          )}
+          <div className="text-xs">
+            <div className="font-semibold text-gray-900">{displayName}</div>
+            <div className="text-gray-600 truncate max-w-[210px]">
+              See the services we offer, view our work and book directly on
+              VextUp.
+            </div>
+            <div className="text-[10px] text-blue-600 truncate">
+              {videoUrl}
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-4 text-sm">
+          <div>
+            <p className="text-xs text-gray-600 mb-2">Share</p>
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={handleWhatsapp}
+                className="flex flex-col items-center text-xs text-gray-700 hover:text-black"
+              >
+                <div className="w-9 h-9 rounded-full border flex items-center justify-center mb-1">
+                  <FaWhatsapp />
+                </div>
+                WhatsApp
+              </button>
+
+              <button
+                type="button"
+                onClick={handleFacebook}
+                className="flex flex-col items-center text-xs text-gray-700 hover:text-black"
+              >
+                <div className="w-9 h-9 rounded-full border flex items-center justify-center mb-1">
+                  <FaFacebook />
+                </div>
+                Facebook
+              </button>
+
+              <button
+                type="button"
+                onClick={handleTwitter}
+                className="flex flex-col items-center text-xs text-gray-700 hover:text-black"
+              >
+                <div className="w-9 h-9 rounded-full border flex items-center justify-center mb-1">
+                  <FaTwitter />
+                </div>
+                X/Twitter
+              </button>
+
+              <button
+                type="button"
+                onClick={handleEmail}
+                className="flex flex-col items-center text-xs text-gray-700 hover:text-black"
+              >
+                <div className="w-9 h-9 rounded-full border flex items-center justify-center mb-1">
+                  <FaEnvelope />
+                </div>
+                Email
+              </button>
+
+              <button
+                type="button"
+                onClick={handleInstagram}
+                className="flex flex-col items-center text-xs text-gray-700 hover:text-black"
+              >
+                <div className="w-9 h-9 rounded-full border flex items-center justify-center mb-1">
+                  <FaInstagram />
+                </div>
+                Instagram
+              </button>
+
+              <button
+                type="button"
+                onClick={handleTiktok}
+                className="flex flex-col items-center text-xs text-gray-700 hover:text-black"
+              >
+                <div className="w-9 h-9 rounded-full border flex items-center justify-center mb-1">
+                  <SiTiktok />
+                </div>
+                TikTok
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <p className="text-xs text-gray-600 mb-1">
+              Message &amp; link
+            </p>
+            <textarea
+              readOnly
+              value={shareText}
+              className="w-full border rounded px-2 py-2 text-xs bg-gray-50 h-16 resize-none"
+            />
+            <div className="mt-2 flex gap-2">
+              <button
+                type="button"
+                onClick={() => copyText(shareText)}
+                className="px-3 py-1 rounded-full bg-gray-900 text-white text-xs font-medium hover:bg-black"
+              >
+                Copy message + link
+              </button>
+              <button
+                type="button"
+                onClick={copyLinkOnly}
+                className="px-3 py-1 rounded-full border border-gray-300 text-xs font-medium hover:bg-gray-100"
+              >
+                Copy link only
+              </button>
+            </div>
+          </div>
+
+          <p className="text-[11px] text-gray-500">
+            On Instagram and TikTok, we copy this message to your clipboard
+            and open their site. Paste it into a post, story, or DM so people
+            can tap the link and see your services, work and booking options.
+          </p>
+        </div>
+      </div>
     </div>
   );
 }
