@@ -280,102 +280,51 @@ export default function BusinessHandlePage() {
       try {
         let uid: string | null = null;
 
-        // 1) canonical mapping: /businessUsernames/{handleLower}
-        const mapRef = doc(db, 'businessUsernames', handle);
-        const mapSnap = await getDoc(mapRef);
-        if (mapSnap.exists()) {
-          uid = (mapSnap.data() as any).uid || null;
-        }
+        const usersCol = collection(db, 'users');
 
-        // 2) Fallback: try direct Firestore queries on businessUsername fields
-        if (!uid) {
-          const usersCol = collection(db, 'users');
+        // 1) Prefer a normalized stored field businessUsernameLower if present
+        let foundSnap = await getDocs(
+          query(
+            usersCol,
+            where('businessUsernameLower', '==', handle),
+            limit(1),
+          ),
+        );
 
-          // 2a) explicit lowercased businessUsername field
-          let foundSnap = await getDocs(
+        // 2) Fallback: exact businessUsername match against the raw handle
+        if (foundSnap.empty && rawHandle) {
+          foundSnap = await getDocs(
             query(
               usersCol,
-              where('businessUsernameLower', '==', handle),
+              where('businessUsername', '==', rawHandle),
               limit(1),
             ),
           );
-
-          // 2b) exact businessUsername == rawHandle (e.g. "Trimac")
-          if (foundSnap.empty && rawHandle) {
-            foundSnap = await getDocs(
-              query(
-                usersCol,
-                where('businessUsername', '==', rawHandle),
-                limit(1),
-              ),
-            );
-          }
-
-          if (!foundSnap.empty) {
-            const docSnap = foundSnap.docs[0];
-            uid = docSnap.id;
-            // backfill mapping for next time
-            try {
-              await setDoc(mapRef, { uid });
-            } catch (e) {
-              console.warn('backfill businessUsernames failed:', e);
-            }
-          }
         }
 
-        // 3) Last-resort fallback:
-        //    scan providers & match by NORMALIZED handle
-        //    using businessUsername || username || personalUsername
-        if (!uid) {
-          const usersCol = collection(db, 'users');
-
-          const scanForHandle = (snap: any) => {
-            let found: string | null = null;
-            snap.forEach((docSnap: any) => {
-              if (found) return;
-              const d = docSnap.data() as any;
-              const bh = normalizeHandle(
-                d.businessUsername ||
-                  d.username ||
-                  d.personalUsername ||
-                  d.handle,
-              );
-              if (bh && bh === handle) {
-                found = docSnap.id;
-              }
-            });
-            return found;
-          };
-
-          // 3a) new flag isProvider
-          let providersSnap = await getDocs(
-            query(usersCol, where('isProvider', '==', true)),
+        // 3) Last-resort: scan providers and match in JS by normalized businessUsername
+        if (foundSnap.empty) {
+          const providersSnap = await getDocs(
+            query(collection(db, 'users'), where('isProvider', '==', true)),
           );
-          let foundUid = scanForHandle(providersSnap);
 
-          // 3b) legacy flag isServiceProvider (if still nothing)
-          if (!foundUid) {
-            const legacySnap = await getDocs(
-              query(usersCol, where('isServiceProvider', '==', true)),
-            );
-            foundUid = scanForHandle(legacySnap);
-          }
-
-          if (foundUid) {
-            uid = foundUid;
-            try {
-              await setDoc(mapRef, { uid });
-            } catch (e) {
-              console.warn('backfill businessUsernames (scan) failed:', e);
+          let foundUid: string | null = null;
+          providersSnap.forEach((docSnap) => {
+            if (foundUid) return;
+            const d = docSnap.data() as any;
+            const bh = normalizeHandle(d.businessUsername);
+            if (bh && bh === handle) {
+              foundUid = docSnap.id;
             }
-          }
+          });
+
+          uid = foundUid;
+        } else {
+          const docSnap = foundSnap.docs[0];
+          uid = docSnap.id;
         }
 
         if (!uid) {
-          console.warn('[BUSINESS_HANDLE] no user found for handle', {
-            handle,
-            rawHandle,
-          });
           setNotFound(true);
           setLoading(false);
           return;
@@ -616,7 +565,7 @@ export default function BusinessHandlePage() {
       ? rawHandle
       : `@${rawHandle || handle}`;
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg.white">
+      <div className="min-h-screen flex flex-col items-center justify-center bg-white">
         <h1 className="text-xl font-semibold text-gray-800 mb-2">
           Business {displayHandle} not found.
         </h1>
@@ -650,12 +599,493 @@ export default function BusinessHandlePage() {
         <FiHome className="w-6 h-6" />
       </button>
 
-      {/* ... (rest of your existing JSX for header, posts grid, services modal, share modal, etc. stays exactly the same) ... */}
-      {/* I’ve left everything below unchanged from your current file aside from the handle-resolution logic above. */}
-      {/* ----- KEEP ALL THE JSX AND MODALS YOU ALREADY HAD FROM THIS POINT DOWN ----- */}
-      {/* (to keep the message shorter, but you can paste everything from your current file starting from:
-           <div className="max-w-5xl mx-auto pb-10 pt-8 sm:pt-12"> ... down to the end)
-      */}
+      <div className="max-w-5xl mx-auto pb-10 pt-8 sm:pt-12">
+        {/* Header — Instagram-like */}
+        <div className="px-4 sm:px-6">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:gap-10">
+            {/* avatar */}
+            <div className="flex justify-center sm:block">
+              <div className="w-28 h-28 sm:w-36 sm:h-36 rounded-full overflow-hidden ring-2 ring-gray-200">
+                {avatarUrl ? (
+                  <img
+                    src={avatarUrl}
+                    alt={displayName}
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <div className="w-full h-full bg-gray-200" />
+                )}
+              </div>
+            </div>
+
+            {/* name + actions */}
+            <div className="mt-4 sm:mt-0 flex-1">
+              <div className="flex items-center gap-3 flex-wrap">
+                <h1 className="text-2xl sm:text-3xl font-semibold">
+                  {displayName}
+                </h1>
+
+                {/* Follow / Message / Share (viewer only for follow/message) */}
+                {user?.uid !== resolvedUid && resolvedUid && (
+                  <>
+                    <button
+                      onClick={toggleFollow}
+                      className={`px-4 py-1 rounded text-sm font-medium ${
+                        isFollowing
+                          ? 'bg-gray-200'
+                          : 'bg-blue-500 text-white hover:bg-blue-600'
+                      }`}
+                      aria-label={isFollowing ? 'Following' : 'Follow'}
+                      title={isFollowing ? 'Following' : 'Follow'}
+                    >
+                      {isFollowing ? 'Following' : 'Follow'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleMessageClick}
+                      className="px-3 py-1 rounded-full border border-gray-300 text-sm flex items-center gap-1 text-gray-700 hover:bg-gray-100"
+                    >
+                      <span>Message</span>
+                    </button>
+                  </>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setShareOpen(true)}
+                  className="px-3 py-1 rounded-full border border-gray-300 text-sm flex items-center gap-1 text-gray-700 hover:bg-gray-100"
+                  title="Share profile"
+                >
+                  <FiShare2 className="text-gray-600" />
+                  <span className="hidden sm:inline">Share</span>
+                </button>
+              </div>
+
+              {/* stats line with icons + services button */}
+              <div className="flex flex-wrap items-center gap-4 mt-3 text-sm text-gray-700">
+                <span className="flex items-center gap-1">
+                  <FiImage className="text-gray-600" />
+                  <b>{uploads.length}</b> posts
+                </span>
+                <span className="flex items-center gap-1">
+                  <FiUsers className="text-gray-600" />
+                  <b>{followersCount}</b> followers
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setServicesListOpen(true)}
+                  className="px-3 py-1 rounded-full border border-gray-300 text-xs font-medium text-gray-700 hover:bg-gray-100"
+                >
+                  Services offered
+                </button>
+              </div>
+
+              {/* Full location + map link */}
+              {(fullAddress || mapsHref) && (
+                <div className="mt-3 text-sm text-gray-800 flex items-start gap-2">
+                  <FiMapPin className="mt-0.5 shrink-0 text-gray-600" />
+                  <div>
+                    {fullAddress && <div>{fullAddress}</div>}
+                    {mapsHref && (
+                      <a
+                        href={mapsHref}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-600 hover:underline text-sm"
+                      >
+                        View on map
+                      </a>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {profile.operatingHours && (
+                <div className="mt-2 text-sm text-gray-700 flex items-start gap-2">
+                  <FiClock className="mt-0.5 shrink-0 text-gray-600" />
+                  <span>{profile.operatingHours}</span>
+                </div>
+              )}
+
+              {profile.servicesProvided && (
+                <div className="mt-2 text-sm text-gray-600">
+                  {profile.servicesProvided}
+                </div>
+              )}
+
+              {profile.bio && (
+                <div className="mt-2 text-sm text-gray-700">
+                  {profile.bio}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Tabs (visual only) */}
+          <div className="border-t mt-8 flex justify-center">
+            <div className="flex items-center gap-8 text-xs tracking-widest uppercase text-gray-500">
+              <div className="flex items-center gap-1 py-3 border-t-2 border-black text-black">
+                <FiGrid /> Posts
+              </div>
+              <div className="flex items-center gap-1 py-3 opacity-60">
+                <FiFilm /> Reels
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Grid of posts */}
+        <div className="px-2 sm:px-0 mt-6">
+          {uploads.length === 0 ? (
+            <p className="text-center text-gray-500 mt-10">No uploads yet.</p>
+          ) : (
+            <div className="grid grid-cols-3 gap-1 sm:gap-2 mt-2">
+              {uploads.map((v) => {
+                const cover = firstMedia(v);
+                const stacked =
+                  !!v.hasCarousel || (v.media && v.media.length > 1);
+
+                return (
+                  <button
+                    key={v.id}
+                    className="relative group bg-gray-100 aspect-square overflow-hidden"
+                    onClick={() => {
+                      setFeedStartId(v.id);
+                      setFeedOpen(true);
+                    }}
+                  >
+                    {cover?.type === 'image' ? (
+                      <img
+                        src={cover.url}
+                        alt={v.title || 'upload'}
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <video
+                        src={cover?.url}
+                        muted
+                        playsInline
+                        loop
+                        className="w-full h-full object-cover"
+                      />
+                    )}
+
+                    {/* stacked indicator */}
+                    {stacked && (
+                      <div className="absolute top-2 right-2 text-white/95 drop-shadow-[0_1px_1px_rgba(0,0,0,0.8)]">
+                        <div className="relative w-5 h-5">
+                          <span className="absolute inset-0 rounded-sm bg-black/40 border border-white/30" />
+                          <span className="absolute -top-1 -right-1 w-5 h-5 rounded-sm bg-black/40 border border-white/30" />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* owner tools */}
+                    {isOwner && (
+                      <div className="absolute top-2 left-2 flex gap-2 opacity-0 group-hover:opacity-100 transition">
+                        <span
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setEditingVideo(v);
+                          }}
+                          className="p-1 rounded-full bg-black/60 text-white hover:bg-black/80 cursor-pointer"
+                          title="Edit"
+                          aria-label="Edit"
+                        >
+                          <FiEdit2 />
+                        </span>
+                        <span
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDelete(v);
+                          }}
+                          className="p-1 rounded-full bg-black/60 text-white hover:bg-black/80 cursor-pointer"
+                          title="Delete"
+                          aria-label="Delete"
+                        >
+                          <FiTrash2 />
+                        </span>
+                      </div>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {editingVideo && (
+          <EditVideoModal
+            video={editingVideo}
+            onClose={() => setEditingVideo(null)}
+          />
+        )}
+
+        {feedOpen && (
+          <PostFeedModal
+            videos={uploads}
+            startVideoId={feedStartId}
+            creatorProfile={profile}
+            onClose={() => setFeedOpen(false)}
+          />
+        )}
+
+        {bookingService && resolvedUid && (
+          <BookingModal
+            video={
+              {
+                id: `svc_${bookingService.id}`,
+                title: bookingService.name,
+                serviceCost: bookingService.basePrice, // base price; markup applied in client views
+                timeTaken: {
+                  hours: Math.floor(bookingService.durationMinutes / 60),
+                  minutes: bookingService.durationMinutes % 60,
+                },
+                userId: resolvedUid,
+              } as any
+            }
+            onClose={() => setBookingService(null)}
+          />
+        )}
+      </div>
+
+      {/* SERVICES LIST MODAL */}
+      {servicesListOpen && (
+        <div className="fixed inset-0 z-40 bg-black/60 flex items-center justify-center">
+          <div className="bg-white rounded-lg w-[92vw] max-w-lg max-h-[80vh] flex flex-col shadow-xl">
+            <div className="px-4 py-3 border-b flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900">
+                  Services offered
+                </h3>
+                <p className="text-[11px] text-gray-500">
+                  See what this provider offers and book directly.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                {isOwner && (
+                  <button
+                    type="button"
+                    onClick={openAddServiceModal}
+                    className="px-3 py-1 rounded-full bg-[#0F7A5F] text-white text-xs hover:opacity-90"
+                  >
+                    Add service
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setServicesListOpen(false)}
+                  className="text-xs text-gray-500 hover:text-gray-800"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2">
+              {servicesOffered.length === 0 && (
+                <p className="text-xs text-gray-500">
+                  {isOwner
+                    ? 'You have not added any services yet. Use “Add service” to list what you offer along with prices.'
+                    : "This provider hasn't listed any services yet."}
+                </p>
+              )}
+
+              {servicesOffered.map((svc) => {
+                const base = svc.basePrice || 0;
+                const displayed = isOwner
+                  ? base
+                  : applyMarkup(base, markupConfig);
+                const mins = svc.durationMinutes || 0;
+                const hrs = mins ? Math.floor(mins / 60) : 0;
+                const remMins = mins ? mins % 60 : 0;
+
+                return (
+                  <div
+                    key={svc.id}
+                    className="flex items-center justify-between border rounded-lg px-3 py-2 text-sm"
+                  >
+                    <div className="flex-1 mr-3">
+                      <div className="font-medium text-gray-900">
+                        {svc.name}
+                      </div>
+                      <div className="text-xs text-gray-600 mt-0.5">
+                        {isOwner ? (
+                          <>
+                            Base price:{' '}
+                            <span className="font-semibold">
+                              KSHS {base.toLocaleString()}
+                            </span>
+                            {' · '}
+                            Clients currently see approx.{` `}
+                            <span className="font-semibold">
+                              KSHS {displayed.toLocaleString()}
+                            </span>{' '}
+                            (includes platform fee based on price bracket).
+                          </>
+                        ) : (
+                          <>
+                            From{' '}
+                            <span className="font-semibold">
+                              KSHS {displayed.toLocaleString()}
+                            </span>
+                          </>
+                        )}
+                        {mins > 0 && (
+                          <>
+                            {' · '}
+                            {hrs > 0 && `${hrs} hr`}
+                            {hrs > 0 && remMins > 0 && ' '}
+                            {remMins > 0 && `${remMins} min`}
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      {isOwner && (
+                        <button
+                          type="button"
+                          onClick={() => openEditServiceModal(svc)}
+                          className="px-2 py-1 text-xs rounded border border-gray-300 text-gray-700 hover:bg-gray-100"
+                        >
+                          Edit
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => openBookingForService(svc)}
+                        className="px-3 py-1 text-xs rounded bg-[#0F7A5F] text-white hover:opacity-90"
+                      >
+                        Book
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {isOwner && servicesOffered.length > 0 && (
+                <p className="mt-2 text-[11px] text-gray-500">
+                  Clients see your prices with a small platform fee added on top
+                  (the exact percentage depends on the price bracket). You still
+                  receive the base price you set here.
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add / edit service modal */}
+      {serviceModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center">
+          <div className="bg-white rounded-lg w-[90vw] max-w-md p-4 shadow-lg">
+            <h3 className="text-base font-semibold mb-3">
+              {editingService ? 'Edit service' : 'Add service'}
+            </h3>
+
+            <label className="block text-sm mb-3">
+              <span className="block mb-1">Service name</span>
+              <input
+                type="text"
+                value={serviceNameInput}
+                onChange={(e) => setServiceNameInput(e.target.value)}
+                className="w-full border rounded px-3 py-2 text-sm"
+                placeholder="e.g., Silk press, Haircut, Pedicure"
+              />
+            </label>
+
+            <label className="block text-sm mb-3">
+              <span className="block mb-1">Base price (what you charge)</span>
+              <div className="flex items-center">
+                <span className="mr-2 text-xs font-semibold">KSHS</span>
+                <input
+                  type="number"
+                  min={0}
+                  value={servicePriceInput}
+                  onChange={(e) =>
+                    setServicePriceInput(Number(e.target.value) || '')
+                  }
+                  className="flex-1 border rounded px-3 py-2 text-sm"
+                  placeholder="e.g., 1500"
+                />
+              </div>
+              <p className="mt-1 text-[11px] text-gray-500">
+                Clients see this with a small platform fee added on top. The
+                percentage varies by price bracket, but you still receive the
+                base price you set here.
+              </p>
+            </label>
+
+            <div className="mb-4 text-sm">
+              <span className="block mb-1">Service duration (required)</span>
+              <div className="flex gap-2">
+                <div className="flex-1">
+                  <input
+                    type="number"
+                    min={0}
+                    value={serviceHoursInput}
+                    onChange={(e) =>
+                      setServiceHoursInput(Number(e.target.value) || '')
+                    }
+                    className="w-full border rounded px-2 py-1 text-sm"
+                  />
+                  <div className="text-[11px] text-gray-500 mt-0.5">hrs</div>
+                </div>
+                <div className="flex-1">
+                  <input
+                    type="number"
+                    min={0}
+                    max={59}
+                    value={serviceMinutesInput}
+                    onChange={(e) =>
+                      setServiceMinutesInput(Number(e.target.value) || '')
+                    }
+                    className="w-full border rounded px-2 py-1 text-sm"
+                  />
+                  <div className="text-[11px] text-gray-500 mt-0.5">min</div>
+                </div>
+              </div>
+              <p className="mt-1 text-[11px] text-gray-500">
+                This helps the booking calendar know how long to reserve and
+                which times to block out.
+              </p>
+            </div>
+
+            <div className="flex justify-end gap-2 text-sm">
+              <button
+                type="button"
+                onClick={() => {
+                  setServiceModalOpen(false);
+                  setEditingService(null);
+                }}
+                className="px-3 py-1.5 rounded bg-gray-200 text-gray-800 hover:bg-gray-300"
+                disabled={savingService}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveService}
+                className="px-4 py-1.5 rounded bg-[#0F7A5F] text-white hover:opacity-90 disabled:opacity-60"
+                disabled={savingService}
+              >
+                {savingService ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Share modal */}
+      {shareOpen && (
+        <ProfileShareModal
+          open={shareOpen}
+          onClose={() => setShareOpen(false)}
+          profileUrl={profileUrl}
+          displayName={displayName}
+          avatarUrl={avatarUrl}
+        />
+      )}
     </div>
   );
 }
