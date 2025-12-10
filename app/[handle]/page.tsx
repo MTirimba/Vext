@@ -129,7 +129,7 @@ function getMarkupPercent(basePrice: number, config?: MarkupConfig | null) {
   const tier = cfg.tiers.find(
     (t) => basePrice >= t.min && (t.max == null || basePrice <= t.max),
   );
-  return tier ? tier.percent : 0;
+  return tier ? t.percent : 0;
 }
 
 function applyMarkup(basePrice: number, config?: MarkupConfig | null) {
@@ -1091,7 +1091,7 @@ export default function BusinessHandlePage() {
 }
 
 /* -------------------------------------------------------
- * Profile Share Modal – YouTube-style with more networks
+ * Profile Share Modal – same logic as VideoFeed share
  * ----------------------------------------------------- */
 
 interface ProfileShareModalProps {
@@ -1112,8 +1112,8 @@ function ProfileShareModal({
 
   const url = profileUrl || '';
 
-  // Curated caption used everywhere
-  const shareText = `Check out ${displayName} on VextUp – explore their services, see their work and book directly here: ${url}`;
+  // Curated caption used everywhere (mirrors VideoFeed style)
+  const shareText = `Check out ${displayName} on VextUp – see the services they offer, view their work and book directly here: ${url}`;
 
   const copyLinkAndNotify = async (message?: string) => {
     try {
@@ -1261,7 +1261,9 @@ function ProfileShareModal({
           </div>
 
           <div>
-            <p className="text-xs text-gray-600 mb-1">Profile link & message</p>
+            <p className="text-xs text-gray-600 mb-1">
+              Profile link &amp; message
+            </p>
             <textarea
               readOnly
               value={shareText}

@@ -59,7 +59,9 @@ const DEFAULT_FACETS: ServiceSupportedFacets = {
 
 // For upload we don’t need the "any" option – they’re describing *this* service.
 const UPLOAD_GENDER_OPTIONS = GENDER_OPTIONS.filter((g) => g.id !== 'any');
-const UPLOAD_AGE_GROUP_OPTIONS = AGE_GROUP_OPTIONS.filter((a) => a.id !== 'any');
+const UPLOAD_AGE_GROUP_OPTIONS = AGE_GROUP_OPTIONS.filter(
+  (a) => a.id !== 'any',
+);
 
 export function UploadModal({ onClose }: Props) {
   const router = useRouter();
@@ -351,6 +353,13 @@ export function UploadModal({ onClose }: Props) {
       const resolvedAgeGroup: AgeGroupId | undefined =
         bestForAgeGroup || selectedSubcategory.defaultAgeGroup;
 
+      // 🔹 Choose a thumbnail image for social previews / OpenGraph
+      const firstImageMedia = media.find((m) => m.type === 'image');
+      const primaryMedia = firstImageMedia ?? media[0] ?? null;
+
+      // 🔹 Fallback to a generic OG image in /public if there is no media
+      const thumbnailUrl = primaryMedia?.url || '/og-default.png';
+
       // multi-subcategory support: primary + extras
       const allSubcategoryIdsRaw = [
         selectedSubcategory.id,
@@ -386,7 +395,7 @@ export function UploadModal({ onClose }: Props) {
         targetAgeGroup: resolvedAgeGroup || null,
         hairColors: activeFacets.hairColors ? hairColorIds : [],
         nailShapes: activeFacets.nailShapes ? nailShapeIds : [],
-        nailLength: activeFacets.nailLength ? nailLengthId || null : null,
+        nailLength: activeFacets.nailLength ? (nailLengthId || null) : null,
         locationTag: providerLocationTag || null,
 
         // media
@@ -394,6 +403,9 @@ export function UploadModal({ onClose }: Props) {
         coverUrl: media[0]?.url || '',
         media,
         hasCarousel: media.length > 1,
+
+        // ✨ Thumbnail used for social previews (WhatsApp, FB, X, etc.)
+        thumbnailUrl,
 
         // core service info
         serviceCost: cost,
@@ -959,9 +971,7 @@ export function UploadModal({ onClose }: Props) {
               className="w-20 px-2 py-1 border rounded text-sm"
               placeholder="Cost"
               value={addonCost}
-              onChange={(e) =>
-                setAddonCost(Number(e.target.value) || 0)
-              }
+              onChange={(e) => setAddonCost(Number(e.target.value) || 0)}
             />
             <input
               type="text"
