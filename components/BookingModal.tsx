@@ -1,5 +1,4 @@
 // /workspaces/Vext/components/BookingModal.tsx
-// /workspaces/Vext/components/BookingModal.tsx
 "use client";
 
 import { useEffect, useRef, useState, useMemo } from "react";
@@ -103,7 +102,7 @@ function getMarkupPercent(basePrice: number, config?: MarkupConfig | null) {
   const tier = cfg.tiers.find(
     (t) => basePrice >= t.min && (t.max == null || basePrice <= t.max),
   );
-  return tier ? tier.percent : 0; // ✅ use `tier`
+  return tier ? tier.percent : 0;
 }
 
 /* ---------- Provider schedule helpers ---------- */
@@ -831,372 +830,392 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
     walletBalance < totalWithMarkup;
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-      <div className="bg-white text-black rounded-lg p-6 w-[90vw] max-w-md shadow-lg relative">
-        <button
-          onClick={onClose}
-          className="text-xl absolute top-4 right-4"
-          aria-label="Close"
+    <>
+      {/* Overlay: clicking outside closes modal */}
+      <div
+        className="fixed inset-0 bg-black/60 flex items-center justify-center z-50"
+        onClick={onClose}
+      >
+        {/* Modal card: stop click propagation so inside clicks don't close it */}
+        <div
+          className="bg-white text-black rounded-lg p-6 w-[90vw] max-w-md shadow-lg relative"
+          onClick={(e) => e.stopPropagation()}
         >
-          ×
-        </button>
+          <button
+            onClick={onClose}
+            className="text-xl absolute top-4 right-4"
+            aria-label="Close"
+          >
+            ×
+          </button>
 
-        {/* Logo */}
-        <div className="flex justify-center mb-4">
-          <img
-            src="/vextup-logo.png"
-            alt="VEXTUP"
-            className="h-20 w-auto object-contain"
-          />
-        </div>
-
-        {!user ? (
-          <div className="text-center p-2">
-            <h2 className="text-lg font-bold mb-2">Sign in to Book</h2>
-            <p className="text-sm text-gray-700 mb-4">
-              You need an account to book this service.
-            </p>
-            <button
-              onClick={() => setAuthOpen(true)}
-              className="px-4 py-2 rounded bg-[#0F7A5F] hover:bg-[#0b644e] text-white"
-            >
-              Sign In / Sign Up
-            </button>
-            {authOpen && (
-              <AuthModal open={authOpen} onClose={() => setAuthOpen(false)} />
-            )}
+          {/* Logo */}
+          <div className="flex justify-center mb-4">
+            <img
+              src="/vextup-logo.png"
+              alt="VEXTUP"
+              className="h-20 w-auto object-contain"
+            />
           </div>
-        ) : (
-          <>
-            {step === 3 && confirmed ? (
-              <div className="text-center">
-                <div className="mx-auto mb-4 w-14 h-14 rounded-full bg-green-100 flex items-center justify-center">
-                  <span className="text-2xl">✅</span>
-                </div>
-                <h2 className="text-xl font-bold mb-2">Booking Confirmed</h2>
-                <div className="text-sm text-gray-700 space-y-1 mb-4">
-                  {confirmed.shortId ? (
-                    <p>
-                      <strong>Booking Code:</strong> {confirmed.shortId}
-                    </p>
-                  ) : (
-                    <p>
-                      <strong>Booking ID:</strong> {confirmed.bookingId}
-                    </p>
-                  )}
-                  {confirmed.ref && (
-                    <p>
-                      <strong>Payment Ref:</strong> {confirmed.ref}
-                    </p>
-                  )}
-                  <p>
-                    <strong>Date:</strong>{" "}
-                    {new Date(confirmed.dateISO).toDateString()}
-                  </p>
-                  <p>
-                    <strong>Time:</strong> {confirmed.time}
-                  </p>
-                  <p>
-                    <strong>Total Paid:</strong> KSHS {confirmed.total}
-                  </p>
-                  {confirmed.completionPin && (
-                    <p className="mt-2">
-                      <strong>Service Release PIN:</strong>{" "}
-                      <span className="font-mono tracking-widest">
-                        {confirmed.completionPin}
-                      </span>
-                    </p>
-                  )}
-                </div>
 
-                {confirmed.completionPin && (
-                  <p className="text-xs text-gray-500 mb-4">
-                    Share this PIN with your provider{" "}
-                    <span className="font-semibold">only after</span> you are
-                    satisfied the service has been delivered. They will use it
-                    to confirm delivery and release funds.
-                  </p>
-                )}
-
-                <div className="flex gap-2 justify-center">
-                  <button
-                    onClick={() => {
-                      onClose();
-                      router.push("/bookings");
-                    }}
-                    className="px-4 py-2 rounded bg-[#0F7A5F] hover:bg-[#0b644e] text-white"
-                  >
-                    View My Bookings
-                  </button>
-                  <button
-                    onClick={onClose}
-                    className="px-4 py-2 rounded bg-gray-200"
-                  >
-                    Close
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <>
-                {!profileComplete ? (
-                  <>
-                    <h2 className="text-lg font-bold mb-3">
-                      Complete Your Profile
-                    </h2>
-                    <label>Full Name</label>
-                    <input
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      className="w-full border rounded px-2 py-1 mb-4"
-                    />
-                    <label>Phone Number</label>
-                    <PhoneInput
-                      international
-                      defaultCountry="KE"
-                      value={phone}
-                      onChange={(v) => setPhone(v || "")}
-                      className="w-full mb-4"
-                    />
-                    <button
-                      onClick={handleProfileSave}
-                      className="w-full bg-[#0F7A5F] hover:bg-[#0b644e] text-white py-2 rounded"
-                    >
-                      Save & Continue
-                    </button>
-                  </>
-                ) : step === 1 ? (
-                  <>
-                    <h2 className="text-lg font-bold mb-3">Book Service</h2>
-
-                    {specialInstructions ? (
-                      <div className="mb-3 p-3 rounded bg-emerald-50 border border-emerald-100 text-sm">
-                        <div className="font-semibold mb-1">
-                          Special instructions
-                        </div>
-                        <p className="text-gray-800 whitespace-pre-wrap">
-                          {specialInstructions}
-                        </p>
-                      </div>
-                    ) : null}
-
-                    {includes.length > 0 && (
-                      <div className="mb-3 p-3 rounded bg-gray-50 border text-sm">
-                        <div className="font-semibold mb-1">Included</div>
-                        <ul className="list-disc list-inside text-gray-800">
-                          {includes.map((it, i) => (
-                            <li key={i}>{it}</li>
-                          ))}
-                        </ul>
-                      </div>
+          {!user ? (
+            <div className="text-center p-2">
+              <h2 className="text-lg font-bold mb-2">Sign in to Book</h2>
+              <p className="text-sm text-gray-700 mb-4">
+                You need an account to book this service.
+              </p>
+              <button
+                onClick={() => setAuthOpen(true)}
+                className="px-4 py-2 rounded bg-[#0F7A5F] hover:bg-[#0b644e] text-white"
+              >
+                Sign In / Sign Up
+              </button>
+            </div>
+          ) : (
+            <>
+              {step === 3 && confirmed ? (
+                <div className="text-center">
+                  <div className="mx-auto mb-4 w-14 h-14 rounded-full bg-green-100 flex items-center justify-center">
+                    <span className="text-2xl">✅</span>
+                  </div>
+                  <h2 className="text-xl font-bold mb-2">Booking Confirmed</h2>
+                  <div className="text-sm text-gray-700 space-y-1 mb-4">
+                    {confirmed.shortId ? (
+                      <p>
+                        <strong>Booking Code:</strong> {confirmed.shortId}
+                      </p>
+                    ) : (
+                      <p>
+                        <strong>Booking ID:</strong> {confirmed.bookingId}
+                      </p>
                     )}
-                    {notProvided.length > 0 && (
-                      <div className="mb-3 p-3 rounded bg-gray-50 border text-sm">
-                        <div className="font-semibold mb-1">Not provided</div>
-                        <ul className="list-disc list-inside text-gray-700">
-                          {notProvided.map((it, i) => (
-                            <li key={i}>{it}</li>
-                          ))}
-                        </ul>
-                      </div>
+                    {confirmed.ref && (
+                      <p>
+                        <strong>Payment Ref:</strong> {confirmed.ref}
+                      </p>
                     )}
-
-                    {/* Date & time */}
-                    <Calendar
-                      onChange={(d) => {
-                        setSelectedDate(d as Date);
-                        setSelectedTime("");
-                      }}
-                      value={selectedDate}
-                      tileDisabled={tileDisabled}
-                    />
-
-                    <label className="mt-4 block">Select Time:</label>
-                    <select
-                      className="w-full border rounded px-2 py-1"
-                      value={selectedTime}
-                      onChange={(e) => setSelectedTime(e.target.value)}
-                    >
-                      <option value="">-- time --</option>
-                      {candidateSlots.length === 0 && (
-                        <option disabled>
-                          {awayDates.includes(dateToISO(selectedDate))
-                            ? "Provider is away"
-                            : "Closed"}
-                        </option>
-                      )}
-                      {candidateSlots.map((t) => {
-                        const isBooked = bookedTimes.includes(t);
-                        const isPast =
-                          selectedDate.toDateString() ===
-                            new Date().toDateString() && isTimeInPastToday(t);
-                        const disabled = isBooked || isPast;
-                        return (
-                          <option key={t} value={t} disabled={disabled}>
-                            {t} {isBooked ? "(Booked)" : ""}
-                          </option>
-                        );
-                      })}
-                    </select>
-
-                    {/* Price summary */}
-                    <div className="mt-4 text-sm bg-gray-50 border rounded p-3">
-                      <div className="flex justify-between">
-                        <span>Base</span>
-                        <span className="tabular-nums">
-                          KSHS {baseForDisplay}
+                    <p>
+                      <strong>Date:</strong>{" "}
+                      {new Date(confirmed.dateISO).toDateString()}
+                    </p>
+                    <p>
+                      <strong>Time:</strong> {confirmed.time}
+                    </p>
+                    <p>
+                      <strong>Total Paid:</strong> KSHS {confirmed.total}
+                    </p>
+                    {confirmed.completionPin && (
+                      <p className="mt-2">
+                        <strong>Service Release PIN:</strong>{" "}
+                        <span className="font-mono tracking-widest">
+                          {confirmed.completionPin}
                         </span>
-                      </div>
-                      {addonsRawTotal > 0 && (
+                      </p>
+                    )}
+                  </div>
+
+                  {confirmed.completionPin && (
+                    <p className="text-xs text-gray-500 mb-4">
+                      Share this PIN with your provider{" "}
+                      <span className="font-semibold">only after</span> you are
+                      satisfied the service has been delivered. They will use
+                      it to confirm delivery and release funds.
+                    </p>
+                  )}
+
+                  <div className="flex gap-2 justify-center">
+                    <button
+                      onClick={() => {
+                        onClose();
+                        router.push("/bookings");
+                      }}
+                      className="px-4 py-2 rounded bg-[#0F7A5F] hover:bg-[#0b644e] text-white"
+                    >
+                      View My Bookings
+                    </button>
+                    <button
+                      onClick={onClose}
+                      className="px-4 py-2 rounded bg-gray-200"
+                    >
+                      Close
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  {!profileComplete ? (
+                    <>
+                      <h2 className="text-lg font-bold mb-3">
+                        Complete Your Profile
+                      </h2>
+                      <label>Full Name</label>
+                      <input
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                        className="w-full border rounded px-2 py-1 mb-4"
+                      />
+                      <label>Phone Number</label>
+                      <PhoneInput
+                        international
+                        defaultCountry="KE"
+                        value={phone}
+                        onChange={(v) => setPhone(v || "")}
+                        className="w-full mb-4"
+                      />
+                      <button
+                        onClick={handleProfileSave}
+                        className="w-full bg-[#0F7A5F] hover:bg-[#0b644e] text-white py-2 rounded"
+                      >
+                        Save & Continue
+                      </button>
+                    </>
+                  ) : step === 1 ? (
+                    <>
+                      <h2 className="text-lg font-bold mb-3">Book Service</h2>
+
+                      {specialInstructions ? (
+                        <div className="mb-3 p-3 rounded bg-emerald-50 border border-emerald-100 text-sm">
+                          <div className="font-semibold mb-1">
+                            Special instructions
+                          </div>
+                          <p className="text-gray-800 whitespace-pre-wrap">
+                            {specialInstructions}
+                          </p>
+                        </div>
+                      ) : null}
+
+                      {includes.length > 0 && (
+                        <div className="mb-3 p-3 rounded bg-gray-50 border text-sm">
+                          <div className="font-semibold mb-1">Included</div>
+                          <ul className="list-disc list-inside text-gray-800">
+                            {includes.map((it, i) => (
+                              <li key={i}>{it}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {notProvided.length > 0 && (
+                        <div className="mb-3 p-3 rounded bg-gray-50 border text-sm">
+                          <div className="font-semibold mb-1">
+                            Not provided
+                          </div>
+                          <ul className="list-disc list-inside text-gray-700">
+                            {notProvided.map((it, i) => (
+                              <li key={i}>{it}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {/* Date & time */}
+                      <Calendar
+                        onChange={(d) => {
+                          setSelectedDate(d as Date);
+                          setSelectedTime("");
+                        }}
+                        value={selectedDate}
+                        tileDisabled={tileDisabled}
+                      />
+
+                      <label className="mt-4 block">Select Time:</label>
+                      <select
+                        className="w-full border rounded px-2 py-1"
+                        value={selectedTime}
+                        onChange={(e) => setSelectedTime(e.target.value)}
+                      >
+                        <option value="">-- time --</option>
+                        {candidateSlots.length === 0 && (
+                          <option disabled>
+                            {awayDates.includes(dateToISO(selectedDate))
+                              ? "Provider is away"
+                              : "Closed"}
+                          </option>
+                        )}
+                        {candidateSlots.map((t) => {
+                          const isBooked = bookedTimes.includes(t);
+                          const isPast =
+                            selectedDate.toDateString() ===
+                              new Date().toDateString() &&
+                            isTimeInPastToday(t);
+                          const disabled = isBooked || isPast;
+                          return (
+                            <option key={t} value={t} disabled={disabled}>
+                              {t} {isBooked ? "(Booked)" : ""}
+                            </option>
+                          );
+                        })}
+                      </select>
+
+                      {/* Price summary */}
+                      <div className="mt-4 text-sm bg-gray-50 border rounded p-3">
                         <div className="flex justify-between">
-                          <span>Extras</span>
+                          <span>Base</span>
                           <span className="tabular-nums">
-                            KSHS {extrasForDisplay}
+                            KSHS {baseForDisplay}
                           </span>
                         </div>
-                      )}
-                      <div className="flex justify-between font-semibold mt-1">
-                        <span>Total</span>
-                        <span className="tabular-nums">
-                          KSHS {totalWithMarkup}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* ⭐ Client special instructions to provider */}
-                    <div className="mt-4">
-                      <label className="block text-sm font-medium mb-1">
-                        Special instructions for your provider (optional)
-                      </label>
-                      <textarea
-                        className="w-full border rounded px-2 py-1 text-sm min-h-[80px]"
-                        placeholder="E.g. Bring your own tools, call when you arrive, I have allergies, etc."
-                        value={clientInstructions}
-                        onChange={(e) => setClientInstructions(e.target.value)}
-                      />
-                      <p className="text-xs text-gray-500 mt-1">
-                        This note will be shared with your provider together
-                        with your booking details.
-                      </p>
-                    </div>
-
-                    <button
-                      onClick={() => setStep(2)}
-                      disabled={!selectedTime}
-                      className="mt-4 w-full bg-[#0F7A5F] hover:bg-[#0b644e] text-white py-2 rounded disabled:bg-gray-400"
-                    >
-                      Continue
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <h2 className="text-lg font-bold mb-3">Confirm Booking</h2>
-                    <p>Date: {selectedDate.toDateString()}</p>
-                    <p>Time: {selectedTime}</p>
-                    <p className="mt-2 font-semibold">
-                      Total: KSHS {totalWithMarkup}
-                    </p>
-
-                    {clientInstructions.trim() && (
-                      <div className="mt-3 p-2 rounded bg-gray-50 border text-xs text-gray-800 whitespace-pre-wrap">
-                        <span className="font-semibold">
-                          Your note to the provider:
-                        </span>{" "}
-                        {clientInstructions}
-                      </div>
-                    )}
-
-                    <select
-                      className="w-full border rounded px-2 py-1 mt-2"
-                      value={paymentMethod}
-                      onChange={(e) =>
-                        setPaymentMethod(e.target.value as PaymentMethod)
-                      }
-                      disabled={mpesaPending}
-                    >
-                      <option value="">-- choose --</option>
-                      <option value="paystack">
-                        Pay with Card (Paystack)
-                      </option>
-                      <option value="mpesa">Pay with M-Pesa</option>
-                      <option
-                        value="wallet"
-                        disabled={
-                          walletBalance == null ||
-                          walletBalance <= 0 ||
-                          walletBalance < totalWithMarkup
-                        }
-                      >
-                        {walletBalance == null
-                          ? "Wallet (loading…)"
-                          : `Pay with Wallet (KSH ${walletBalance.toFixed(
-                              2,
-                            )} available)`}
-                      </option>
-                    </select>
-
-                    {walletError && (
-                      <p className="mt-1 text-xs text-red-600">
-                        {walletError}
-                      </p>
-                    )}
-                    {walletBalance != null && walletBalance < totalWithMarkup && (
-                      <p className="mt-1 text-xs text-red-600">
-                        Wallet balance is not enough for this booking.
-                      </p>
-                    )}
-
-                    {paymentMethod === "mpesa" && (
-                      <div className="mt-3">
-                        <label className="block font-semibold">
-                          M-Pesa number to charge
-                        </label>
-                        <input
-                          type="tel"
-                          placeholder="07XXXXXXXX or +2547XXXXXXXX"
-                          className="w-full border rounded px-2 py-1 mt-2"
-                          value={mpesaPhone}
-                          onChange={(e) => setMpesaPhone(e.target.value)}
-                          disabled={mpesaPending}
-                        />
-                        <p className="text-xs text-gray-600 mt-1">
-                          You can enter 07XXXXXXXX, 7XXXXXXXX, 2547XXXXXXXX or
-                          +2547XXXXXXXX. We&apos;ll format it automatically.
-                        </p>
-                      </div>
-                    )}
-
-                    <button
-                      onClick={handlePay}
-                      disabled={
-                        loading || mpesaPending || (paymentMethod === "wallet" && walletInsufficient)
-                      }
-                      className="mt-4 w-full bg-[#0F7A5F] hover:bg-[#0b644e] text-white py-2 rounded disabled:bg-gray-400"
-                    >
-                      {loading ? "Processing..." : "Proceed to Pay"}
-                    </button>
-
-                    {mpesaPending && (
-                      <div className="mt-4 p-3 rounded bg-emerald-50 border border-emerald-200 text-sm">
-                        <div className="font-semibold mb-1">
-                          Waiting for M-Pesa confirmation…
+                        {addonsRawTotal > 0 && (
+                          <div className="flex justify-between">
+                            <span>Extras</span>
+                            <span className="tabular-nums">
+                              KSHS {extrasForDisplay}
+                            </span>
+                          </div>
+                        )}
+                        <div className="flex justify-between font-semibold mt-1">
+                          <span>Total</span>
+                          <span className="tabular-nums">
+                            KSHS {totalWithMarkup}
+                          </span>
                         </div>
-                        <p className="text-gray-700">
-                          Approve the STK push on your phone. This screen will
-                          update automatically once payment is confirmed.
+                      </div>
+
+                      {/* ⭐ Client special instructions to provider */}
+                      <div className="mt-4">
+                        <label className="block text-sm font-medium mb-1">
+                          Special instructions for your provider (optional)
+                        </label>
+                        <textarea
+                          className="w-full border rounded px-2 py-1 text-sm min-h-[80px]"
+                          placeholder="E.g. Bring your own tools, call when you arrive, I have allergies, etc."
+                          value={clientInstructions}
+                          onChange={(e) =>
+                            setClientInstructions(e.target.value)
+                          }
+                        />
+                        <p className="text-xs text-gray-500 mt-1">
+                          This note will be shared with your provider together
+                          with your booking details.
                         </p>
                       </div>
-                    )}
-                  </>
-                )}
-              </>
-            )}
-          </>
-        )}
+
+                      <button
+                        onClick={() => setStep(2)}
+                        disabled={!selectedTime}
+                        className="mt-4 w-full bg-[#0F7A5F] hover:bg-[#0b644e] text-white py-2 rounded disabled:bg-gray-400"
+                      >
+                        Continue
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <h2 className="text-lg font-bold mb-3">
+                        Confirm Booking
+                      </h2>
+                      <p>Date: {selectedDate.toDateString()}</p>
+                      <p>Time: {selectedTime}</p>
+                      <p className="mt-2 font-semibold">
+                        Total: KSHS {totalWithMarkup}
+                      </p>
+
+                      {clientInstructions.trim() && (
+                        <div className="mt-3 p-2 rounded bg-gray-50 border text-xs text-gray-800 whitespace-pre-wrap">
+                          <span className="font-semibold">
+                            Your note to the provider:
+                          </span>{" "}
+                          {clientInstructions}
+                        </div>
+                      )}
+
+                      <select
+                        className="w-full border rounded px-2 py-1 mt-2"
+                        value={paymentMethod}
+                        onChange={(e) =>
+                          setPaymentMethod(e.target.value as PaymentMethod)
+                        }
+                        disabled={mpesaPending}
+                      >
+                        <option value="">-- choose --</option>
+                        <option value="paystack">
+                          Pay with Card (Paystack)
+                        </option>
+                        <option value="mpesa">Pay with M-Pesa</option>
+                        <option
+                          value="wallet"
+                          disabled={
+                            walletBalance == null ||
+                            walletBalance <= 0 ||
+                            walletBalance < totalWithMarkup
+                          }
+                        >
+                          {walletBalance == null
+                            ? "Wallet (loading…)"
+                            : `Pay with Wallet (KSH ${walletBalance.toFixed(
+                                2,
+                              )} available)`}
+                        </option>
+                      </select>
+
+                      {walletError && (
+                        <p className="mt-1 text-xs text-red-600">
+                          {walletError}
+                        </p>
+                      )}
+                      {walletBalance != null &&
+                        walletBalance < totalWithMarkup && (
+                          <p className="mt-1 text-xs text-red-600">
+                            Wallet balance is not enough for this booking.
+                          </p>
+                        )}
+
+                      {paymentMethod === "mpesa" && (
+                        <div className="mt-3">
+                          <label className="block font-semibold">
+                            M-Pesa number to charge
+                          </label>
+                          <input
+                            type="tel"
+                            placeholder="07XXXXXXXX or +2547XXXXXXXX"
+                            className="w-full border rounded px-2 py-1 mt-2"
+                            value={mpesaPhone}
+                            onChange={(e) => setMpesaPhone(e.target.value)}
+                            disabled={mpesaPending}
+                          />
+                          <p className="text-xs text-gray-600 mt-1">
+                            You can enter 07XXXXXXXX, 7XXXXXXXX, 2547XXXXXXXX
+                            or +2547XXXXXXXX. We&apos;ll format it
+                            automatically.
+                          </p>
+                        </div>
+                      )}
+
+                      <button
+                        onClick={handlePay}
+                        disabled={
+                          loading ||
+                          mpesaPending ||
+                          (paymentMethod === "wallet" && walletInsufficient)
+                        }
+                        className="mt-4 w-full bg-[#0F7A5F] hover:bg-[#0b644e] text-white py-2 rounded disabled:bg-gray-400"
+                      >
+                        {loading ? "Processing..." : "Proceed to Pay"}
+                      </button>
+
+                      {mpesaPending && (
+                        <div className="mt-4 p-3 rounded bg-emerald-50 border border-emerald-200 text-sm">
+                          <div className="font-semibold mb-1">
+                            Waiting for M-Pesa confirmation…
+                          </div>
+                          <p className="text-gray-700">
+                            Approve the STK push on your phone. This screen
+                            will update automatically once payment is
+                            confirmed.
+                          </p>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </>
+              )}
+            </>
+          )}
+        </div>
       </div>
 
+      {/* Global auth modal */}
       {authOpen && (
         <AuthModal open={authOpen} onClose={() => setAuthOpen(false)} />
       )}
-    </div>
+    </>
   );
 }
