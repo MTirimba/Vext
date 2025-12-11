@@ -1,4 +1,5 @@
 "use client";
+
 import { useEffect, useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -18,6 +19,8 @@ import { useAuthState } from "react-firebase-hooks/auth";
 import Calendar from "react-calendar";
 import "react-calendar/dist/Calendar.css";
 import { FaWhatsapp, FaPhoneAlt, FaSortAmountDownAlt } from "react-icons/fa";
+
+/* ---------- Types ---------- */
 
 interface Booking {
   id: string;
@@ -77,6 +80,39 @@ interface UserProfile {
   lng?: number;
 }
 
+/* ---------- Local date helpers (avoid UTC shifting) ---------- */
+
+// Local date-only ISO: always "YYYY-MM-DD" for the local calendar day
+function dateToISO(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+// Parse booking.date safely, handling both "YYYY-MM-DD" and full ISO strings
+function parseBookingDate(raw: string): Date {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    const [y, m, d] = raw.split("-").map((x) => parseInt(x, 10));
+    return new Date(y, (m || 1) - 1, d || 1); // local midnight
+  }
+  const dt = new Date(raw);
+  if (!isNaN(dt.getTime())) return dt;
+  return new Date();
+}
+
+// UI-friendly display for dates (no weird shifts)
+function displayDate(raw?: string): string {
+  if (!raw) return "-";
+  try {
+    const d = parseBookingDate(raw);
+    if (isNaN(d.getTime())) return "-";
+    return d.toLocaleDateString();
+  } catch {
+    return "-";
+  }
+}
+
 /**
  * 💰 Always show what the client actually paid (with markup).
  * Prefer `total`, but fall back to subtotal + fee if needed.
@@ -127,11 +163,15 @@ type SortMode = "newest" | "oldest" | "id" | "cost";
 
 // Try to get a reasonable numeric "time" for sorting
 function bookingTimeValue(b: Booking): number {
-  // Prefer explicit date field
+  // Prefer explicit date field (bookings.date)
   if (b.date) {
-    const d = new Date(b.date);
-    const t = d.getTime();
-    if (!isNaN(t)) return t;
+    try {
+      const d = parseBookingDate(b.date);
+      const t = d.getTime();
+      if (!isNaN(t)) return t;
+    } catch {
+      // ignore and fall through
+    }
   }
 
   // Fallback: createdAt if present (number or Firestore Timestamp)
@@ -168,6 +208,8 @@ function compareBookings(a: Booking, b: Booking, mode: SortMode): number {
   // default: newest
   return tb - ta; // new → old
 }
+
+/* ---------- Component ---------- */
 
 export default function ClientBookings() {
   const [user] = useAuthState(auth);
@@ -327,7 +369,7 @@ export default function ClientBookings() {
     booking: Booking & { video?: Video; provider?: UserProfile },
   ) => {
     setRescheduling(booking);
-    if (booking.date) setNewDate(new Date(booking.date));
+    if (booking.date) setNewDate(parseBookingDate(booking.date));
     if (booking.time) setNewTime(booking.time);
   };
 
@@ -342,7 +384,9 @@ export default function ClientBookings() {
         rescheduling.time!,
         true,
       );
-      const newDateISO = new Date(newDate).toISOString();
+
+      // ✅ store rescheduled date as local "YYYY-MM-DD"
+      const newDateISO = dateToISO(newDate);
 
       // reserve new slot
       await manageTimeSlot(rescheduling.providerId!, newDateISO, newTime, false);
@@ -373,7 +417,7 @@ export default function ClientBookings() {
           ),
           message: `Booking #${
             rescheduling.shortId || rescheduling.id
-          } rescheduled to ${new Date(newDateISO).toDateString()} at ${newTime}.`,
+          } rescheduled to ${displayDate(newDateISO)} at ${newTime}.`,
         }),
       });
 
@@ -532,8 +576,7 @@ export default function ClientBookings() {
             )}
 
             <p>
-              <strong>Date:</strong>{" "}
-              {b.date ? new Date(b.date).toLocaleDateString() : "-"}
+              <strong>Date:</strong> {displayDate(b.date)}
             </p>
             <p>
               <strong>Time:</strong> {b.time || "-"}
@@ -615,7 +658,7 @@ export default function ClientBookings() {
                       aria-label="WhatsApp my number"
                     >
                       <FaWhatsapp className="text-green-600" />
-                    </a>
+                  </a>
                   )}
                   <span className="text-gray-800">{myNumber}</span>
                 </div>

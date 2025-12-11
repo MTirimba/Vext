@@ -67,17 +67,48 @@ interface UserProfile {
 
 // Helper to normalize date strings into YYYY-MM-DD keys
 function dateKey(raw: string | Date): string {
-  const d = raw instanceof Date ? raw : new Date(raw);
-  if (isNaN(d.getTime())) return "";
-  return d.toISOString().split("T")[0];
+  const pad = (n: number) => String(n).padStart(2, "0");
+
+  if (raw instanceof Date) {
+    if (isNaN(raw.getTime())) return "";
+    return `${raw.getFullYear()}-${pad(raw.getMonth() + 1)}-${pad(
+      raw.getDate(),
+    )}`;
+  }
+
+  if (typeof raw === "string") {
+    // Already normalized
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+
+    const d = new Date(raw);
+    if (isNaN(d.getTime())) return "";
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  }
+
+  return "";
+}
+
+// Helper to safely display a date (no UTC shifting issues)
+function displayDate(raw?: string | Date): string {
+  if (!raw) return "-";
+  try {
+    let d: Date;
+    if (raw instanceof Date) {
+      d = raw;
+    } else if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+      const [y, m, day] = raw.split("-").map((x) => parseInt(x, 10));
+      d = new Date(y, (m || 1) - 1, day || 1); // local midnight
+    } else {
+      d = new Date(raw);
+    }
+    if (isNaN(d.getTime())) return "-";
+    return d.toLocaleDateString();
+  } catch {
+    return "-";
+  }
 }
 
 // Helper to compute provider-facing amount (without markup)
-// ✅ Tier-aware / markup-aware:
-// 1) Prefer explicit providerAmount / base/subtotal fields.
-// 2) If platformFee / markupAmount is present, use total - fee.
-// 3) If markupRate is present as a fraction (e.g. 0.1), reverse it.
-// 4) Fallback: treat total as provider share (for display only).
 function providerDisplayAmount(b: Booking): number {
   // 1) Explicit base/provider fields first
   const explicit = Number(
@@ -203,7 +234,7 @@ export default function CreatorBookings() {
       booking.client?.fullName || booking.client?.name;
     if (!clientDisplayName || !booking.clientPhone) return;
 
-    const dateStr = new Date(booking.date).toDateString();
+    const dateStr = displayDate(booking.date);
     const timeStr = booking.time;
     const providerName =
       booking.provider?.name ||
@@ -286,7 +317,6 @@ export default function CreatorBookings() {
   };
 
   // 🔐 handle verifying the client's Service Release PIN
-  // 👉 This is the only way to mark service delivered.
   const handleVerifyPin = async (
     booking: Booking & { client?: UserProfile; provider?: UserProfile },
   ) => {
@@ -498,7 +528,7 @@ export default function CreatorBookings() {
 
             <p className="mt-2">
               <strong>Date:</strong>{" "}
-              {b.date ? new Date(b.date).toLocaleDateString() : "-"}
+              {displayDate(b.date)}
             </p>
             <p>
               <strong>Time:</strong> {b.time}
@@ -719,7 +749,7 @@ export default function CreatorBookings() {
             <h2 className="text-lg font-semibold mb-2">
               {view === "calendar" ? "Bookings on " : "Delivered bookings on "}
               {selectedDateKey
-                ? new Date(selectedDateKey).toLocaleDateString()
+                ? displayDate(selectedDateKey)
                 : "selected day"}
             </h2>
             {currentList.length === 0 ? (

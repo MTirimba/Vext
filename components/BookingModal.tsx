@@ -16,6 +16,8 @@ import {
   getDocs,
   onSnapshot,
   Unsubscribe,
+  query,
+  where,
 } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import { useRouter } from "next/navigation";
@@ -76,11 +78,7 @@ interface MarkupConfig {
   tiers: MarkupTier[];
 }
 
-// Default tiers if Firestore config is missing:
-// 0–1500      → 10%
-// 1500–5000   → 5%
-// 5000–10000  → 2.5%
-// 10000+      → 2%
+// Default tiers if Firestore config is missing
 const DEFAULT_MARKUP_CONFIG: MarkupConfig = {
   tiers: [
     { min: 0, max: 1500, percent: 10 },
@@ -102,7 +100,7 @@ function getMarkupPercent(basePrice: number, config?: MarkupConfig | null) {
   const tier = cfg.tiers.find(
     (t) => basePrice >= t.min && (t.max == null || basePrice <= t.max),
   );
-  return tier ? tier.percent : 0;
+  return tier ? t.percent : 0;
 }
 
 /* ---------- Provider schedule helpers ---------- */
@@ -202,11 +200,6 @@ function isTimeInPastToday(hhmm: string): boolean {
 
 /**
  * Normalize Kenyan Safaricom M-Pesa numbers to 2547XXXXXXXX.
- * Accepts:
- *  - 07XXXXXXXX
- *  - 7XXXXXXXX
- *  - 2547XXXXXXXX
- *  - +2547XXXXXXXX
  */
 function normalizeKeMpesaPhone(raw: string) {
   let p = (raw || "").trim();
@@ -214,28 +207,16 @@ function normalizeKeMpesaPhone(raw: string) {
     throw new Error("Enter the M-Pesa phone number");
   }
 
-  // remove spaces
-  p = p.replace(/\s+/g, "");
+  p = p.replace(/\s+/g, ""); // spaces
+  if (p.startsWith("+")) p = p.slice(1);
+  p = p.replace(/[^\d]/g, ""); // strip non-digits
 
-  // strip leading +
-  if (p.startsWith("+")) {
-    p = p.slice(1);
-  }
-
-  // keep only digits
-  p = p.replace(/[^\d]/g, "");
-
-  // 07XXXXXXXX (10 digits)
   if (/^07\d{8}$/.test(p)) {
-    return "254" + p.slice(1); // 07 -> 2547
+    return "254" + p.slice(1);
   }
-
-  // 7XXXXXXXX (9 digits)
   if (/^7\d{8}$/.test(p)) {
-    return "254" + p; // 7 -> 2547
+    return "254" + p;
   }
-
-  // 2547XXXXXXXX (12 digits)
   if (/^2547\d{8}$/.test(p)) {
     return p;
   }
@@ -244,6 +225,14 @@ function normalizeKeMpesaPhone(raw: string) {
     "Enter a valid Safaricom number like 07XXXXXXXX, 7XXXXXXXX, 2547XXXXXXXX or +2547XXXXXXXX",
   );
 }
+
+// ✅ Local date-only formatter: always returns YYYY-MM-DD for local calendar day
+const dateToISO = (d: Date) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
 
 export default function BookingModal({ video, onClose }: BookingModalProps) {
   const router = useRouter();
@@ -319,7 +308,7 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
   const includes = video.serviceIncludes || [];
   const notProvided = video.notProvided || [];
 
-  const dateToISO = (d: Date) => d.toISOString().split("T")[0];
+  const dateToISOString = (d: Date) => dateToISO(d);
 
   // Load markup config from Firestore (config/pricing)
   useEffect(() => {
@@ -418,19 +407,35 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
     })();
   }, [video?.userId]);
 
-  // 🔁 Live-booked times for selected date
+  // 🔁 Live-booked times for selected date (based on bookings)
   useEffect(() => {
     if (!video?.userId || !selectedDate) return;
-    const dateStr = selectedDate.toISOString().split("T")[0];
-    const q = collection(db, `availability/${video.userId}/slots`);
-    const unsub = onSnapshot(q, (snapshot) => {
-      const times: string[] = [];
-      snapshot.forEach((docSnap) => {
-        const data = docSnap.data();
-        if (data.date === dateStr && data.booked) times.push(data.time);
-      });
-      setBookedTimes(times);
-    });
+    const dateStr = dateToISO(selectedDate);
+
+    const bookingsQuery = query(
+      collection(db, "bookings"),
+      where("providerId", "==", video.userId),
+      where("date", "==", dateStr),
+    );
+
+    const unsub = onSnapshot(
+      bookingsQuery,
+      (snapshot) => {
+        const times: string[] = [];
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data() as any;
+          const status = (data.status || "").toLowerCase();
+          // consider any non-rejected/non-cancelled booking as blocking
+          if (status === "rejected" || status === "cancelled") return;
+          if (data.time) times.push(data.time);
+        });
+        setBookedTimes(times);
+      },
+      (err) => {
+        console.error("booked times listener error", err);
+      },
+    );
+
     return () => unsub();
   }, [video?.userId, selectedDate]);
 
@@ -494,14 +499,21 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
   };
 
   const refreshBookedTimes = async () => {
-    if (!video?.userId) return;
-    const q = collection(db, `availability/${video.userId}/slots`);
-    const snap = await getDocs(q);
-    const dateStr = selectedDate.toISOString().split("T")[0];
+    if (!video?.userId || !selectedDate) return;
+    const dateStr = dateToISO(selectedDate);
+    const snap = await getDocs(
+      query(
+        collection(db, "bookings"),
+        where("providerId", "==", video.userId),
+        where("date", "==", dateStr),
+      ),
+    );
     const times: string[] = [];
     snap.forEach((docSnap) => {
-      const data = docSnap.data();
-      if (data.date === dateStr && data.booked) times.push(data.time);
+      const data = docSnap.data() as any;
+      const status = (data.status || "").toLowerCase();
+      if (status === "rejected" || status === "cancelled") return;
+      if (data.time) times.push(data.time);
     });
     setBookedTimes(times);
   };
@@ -584,7 +596,7 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
 
     try {
       setLoading(true);
-      const dateISO = selectedDate.toISOString().split("T")[0];
+      const dateISO = dateToISO(selectedDate);
 
       const bookingData = {
         clientId: user!.uid,
@@ -594,11 +606,10 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
         time: selectedTime,
         subtotal: Math.round(subtotalRaw * 100) / 100,
         total: totalWithMarkup,
-        markupRate: effectiveMarkupRate, // fraction, e.g. 0.1
-        markupPercent, // for reporting / analytics
-        markupAmount, // approx. total markup in KSHS
+        markupRate: effectiveMarkupRate,
+        markupPercent,
+        markupAmount,
         addons: addonSelections,
-        // ⭐ pass through client-facing info for backend
         clientPhone: phone || null,
         clientName: name || "",
         clientInstructions: clientInstructions.trim() || undefined,
@@ -621,7 +632,7 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
         setCompletionPin(saveData.completionPin);
       }
 
-      // 💰 WALLET FLOW — delegate to backend to debit wallet & confirm booking
+      // 💰 WALLET FLOW
       if (paymentMethod === "wallet") {
         try {
           const confirmRes = await fetch("/api/confirm-booking", {
@@ -703,7 +714,6 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
 
         const PaystackLib = (window as any).PaystackPop;
 
-        // ⚠️ IMPORTANT: Pass a plain function (not async) to Paystack
         const handler = PaystackLib.setup({
           key: process.env.NEXT_PUBLIC_PAYSTACK_KEY!,
           email: user?.email || "noemail@vextup.com",
@@ -764,7 +774,6 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
           }),
         });
 
-        // 🔍 If init fails, stop spinner & surface error
         if (!mpesaRes.ok) {
           setMpesaPending(false);
           const errText = await mpesaRes.text().catch(() => "");
@@ -782,7 +791,6 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
       alert(err.message);
     } finally {
       if (paymentMethod !== "wallet") {
-        // wallet branch already called setLoading(false) in its own finally
         setLoading(false);
       }
     }
@@ -792,7 +800,6 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
   const candidateSlots = useMemo(() => {
     const iso = dateToISO(selectedDate);
     if (awayDates.includes(iso)) {
-      // Provider has blocked this day off completely
       return [];
     }
     return generateSlotsForDate(selectedDate, providerSchedule, 60);
@@ -802,7 +809,6 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
     if (view !== "month") return false;
     if (isPastDay(date)) return true;
 
-    // Provider full-day away blocks from their dashboard
     const iso = dateToISO(date);
     if (awayDates.includes(iso)) return true;
 
@@ -815,10 +821,8 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
       : slots;
     if (effective.length === 0) return true;
 
-    // Fully-booked indicator only for selected day (we know its bookedTimes)
-    const selectedISO = selectedDate.toISOString().split("T")[0];
-    const thisISO = date.toISOString().split("T")[0];
-    if (thisISO === selectedISO) {
+    const selectedISO = dateToISO(selectedDate);
+    if (iso === selectedISO) {
       if (bookedTimes.length >= effective.length) return true;
     }
     return false;
@@ -836,7 +840,7 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
         className="fixed inset-0 bg-black/60 flex items-center justify-center z-50"
         onClick={onClose}
       >
-        {/* Modal card: stop click propagation so inside clicks don't close it */}
+        {/* Modal card */}
         <div
           className="bg-white text-black rounded-lg p-6 w-[90vw] max-w-md shadow-lg relative"
           onClick={(e) => e.stopPropagation()}
