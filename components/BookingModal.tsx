@@ -840,9 +840,9 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
         className="fixed inset-0 bg-black/60 flex items-center justify-center z-50"
         onClick={onClose}
       >
-        {/* Modal card */}
+        {/* Modal card (now scrollable, max height) */}
         <div
-          className="bg-white text-black rounded-lg p-6 w-[90vw] max-w-md shadow-lg relative"
+          className="bg-white text-black rounded-lg p-6 w-[90vw] max-w-md max-h-[90vh] overflow-y-auto shadow-lg relative"
           onClick={(e) => e.stopPropagation()}
         >
           <button
@@ -854,7 +854,7 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
           </button>
 
           {/* Logo */}
-          <div className="flex justify-center mb-4">
+          <div className="flex justify-center mb-4 mt-2">
             <img
               src="/vextup-logo.png"
               alt="VEXTUP"
@@ -998,10 +998,11 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
                           </ul>
                         </div>
                       )}
+
                       {notProvided.length > 0 && (
                         <div className="mb-3 p-3 rounded bg-gray-50 border text-sm">
                           <div className="font-semibold mb-1">
-                            Not provided
+                            Not included / Not provided
                           </div>
                           <ul className="list-disc list-inside text-gray-700">
                             {notProvided.map((it, i) => (
