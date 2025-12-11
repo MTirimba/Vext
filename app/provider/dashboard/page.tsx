@@ -519,16 +519,26 @@ export default function ProviderDashboard() {
         query(
           collection(db, 'bookings'),
           where('providerId', '==', user.uid),
-          where('date', '==', iso),
-          where('status', 'in', ['pending', 'accepted', 'confirmed']),
         ),
       );
 
-      if (!bookingsSnap.empty) {
-        const count = bookingsSnap.size;
+      const activeStatuses = ['pending', 'accepted', 'confirmed'];
+
+      let conflictCount = 0;
+      bookingsSnap.forEach((d) => {
+        const data = d.data() as any;
+        const status = (data.status || '').toLowerCase();
+        const dateStr = data.date;
+        const isActive = activeStatuses.includes(status);
+        if (isActive && dateStr === iso) {
+          conflictCount += 1;
+        }
+      });
+
+      if (conflictCount > 0) {
         const ok = window.confirm(
-          `You already have ${count} active booking${
-            count === 1 ? '' : 's'
+          `You already have ${conflictCount} active booking${
+            conflictCount === 1 ? '' : 's'
           } on ${iso}.\n\nTo block this day off completely, you need to cancel or reschedule those bookings from your bookings page.\n\nOpen your bookings page now?`,
         );
         if (ok) {
