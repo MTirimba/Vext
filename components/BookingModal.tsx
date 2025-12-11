@@ -1011,6 +1011,59 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
                         </div>
                       )}
 
+                      {/* Extras / Add-ons (from provider config) */}
+                      {addons.length > 0 && (
+                        <div className="mb-3 p-3 rounded bg-gray-50 border text-sm">
+                          <div className="flex justify-between items-center mb-1">
+                            <span className="font-semibold">
+                              Extras (optional)
+                            </span>
+                            <span className="text-xs text-gray-500">
+                              Charged on top of the base price
+                            </span>
+                          </div>
+
+                          {addons.map((a) => {
+                            const qty = addonSelections[a.name] || 0;
+                            const addonPriceWithMarkup = withMarkup(a.cost);
+
+                            return (
+                              <div
+                                key={a.name}
+                                className="flex items-center justify-between py-1 border-t first:border-t-0 border-gray-100"
+                              >
+                                <div className="flex-1">
+                                  <div>{a.name}</div>
+                                  <div className="text-[11px] text-gray-500">
+                                    KSHS {addonPriceWithMarkup} / {a.unit}
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => decAddon(a.name)}
+                                    className="w-7 h-7 flex items-center justify-center rounded-full border border-gray-300 text-sm"
+                                  >
+                                    –
+                                  </button>
+                                  <span className="w-6 text-center tabular-nums text-sm">
+                                    {qty}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => incAddon(a.name)}
+                                    className="w-7 h-7 flex items-center justify-center rounded-full border border-gray-900 bg-gray-900 text-white text-sm"
+                                  >
+                                    +
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+
                       {/* Date & time */}
                       <Calendar
                         onChange={(d) => {
