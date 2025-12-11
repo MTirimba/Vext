@@ -11,6 +11,7 @@ import {
   signInWithPhoneNumber,
   PhoneAuthProvider,
   linkWithCredential,
+  sendPasswordResetEmail,
 } from 'firebase/auth';
 import { auth, db } from '@/lib/firebase';
 import { createUserProfile } from '@/lib/auth';
@@ -63,7 +64,7 @@ function normalizePhoneToE164(input: string): string {
   }
 
   throw new Error(
-    'Enter a valid phone number like 07XXXXXXXX, 7XXXXXXXX or +2547XXXXXXXX.'
+    'Enter a valid phone number.'
   );
 }
 
@@ -85,8 +86,14 @@ export interface AuthModalProps {
 export default function AuthModal({ open, onClose }: AuthModalProps) {
   const [identifier, setIdentifier] = useState(''); // email OR phone
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [isSignUp, setIsSignUp] = useState(false);
-  const toggleMode = () => setIsSignUp((v) => !v);
+  const toggleMode = () => {
+    setIsSignUp((v) => !v);
+    setConfirmPassword('');
+    setError(null);
+    setSuccess(null);
+  };
 
   // Phone OTP state (only used when identifier looks like a phone)
   const [otpSent, setOtpSent] = useState(false);
@@ -101,6 +108,10 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
   );
   const [linkPassword, setLinkPassword] = useState('');
   const [loading, setLoading] = useState(false);
+
+  // Inline banners
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
 
   // UI
   const isEmailLike = useMemo(
@@ -120,23 +131,35 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
     };
   }, [open]);
 
-  // Reset phone-OTP-specific state when identifier changes
+  // Reset phone-OTP-specific state + banners when identifier changes
   useEffect(() => {
     setOtpSent(false);
     setOtpCode('');
     setLinkingInfo(null);
+    setError(null);
+    setSuccess(null);
   }, [identifier]);
 
   /* ---------- Google Sign-in ---------- */
 
   const handleGoogle = async () => {
     try {
+      setError(null);
+      setSuccess(null);
+
       const provider = new GoogleAuthProvider();
       const result = await signInWithPopup(auth, provider);
       await createUserProfile(result.user);
       onClose();
     } catch (err: any) {
-      alert(err.message || 'Google sign-in failed');
+      console.error('[AUTH_MODAL] Google sign-in error:', err);
+      let msg =
+        err?.message || 'Google sign-in failed. Please try again or use email/phone.';
+      if (err?.code === 'auth/popup-closed-by-user') {
+        msg =
+          'Google sign-in was cancelled. You can try again or sign in with email or phone.';
+      }
+      setError(msg);
     }
   };
 
@@ -144,14 +167,28 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
 
   const handleEmailSubmit = async () => {
     try {
+      setError(null);
+      setSuccess(null);
+
       const email = identifier.trim();
       if (!email || !looksLikeEmail(email)) {
-        alert('Enter a valid email address.');
+        setError('Enter a valid email address.');
         return;
       }
       if (!password) {
-        alert('Enter your password.');
+        setError('Enter your password.');
         return;
+      }
+
+      if (isSignUp) {
+        if (!confirmPassword) {
+          setError('Please confirm your password.');
+          return;
+        }
+        if (password !== confirmPassword) {
+          setError('Passwords do not match.');
+          return;
+        }
       }
 
       setLoading(true);
@@ -163,7 +200,41 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
       await createUserProfile(cred.user);
       onClose();
     } catch (err: any) {
-      alert(err.message || 'Authentication failed.');
+      console.error('[AUTH_MODAL] email auth error:', err);
+      if (err?.code === 'auth/email-already-in-use') {
+        setError(
+          'An account with this email already exists. Please sign in instead.'
+        );
+        setIsSignUp(false);
+      } else if (err?.code === 'auth/wrong-password') {
+        setError('Incorrect password. Please try again.');
+      } else if (err?.code === 'auth/user-not-found') {
+        setError('No account found with this email. Try signing up instead.');
+      } else {
+        setError(err.message || 'Authentication failed.');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    const email = identifier.trim();
+    setError(null);
+    setSuccess(null);
+
+    if (!looksLikeEmail(email)) {
+      setError('Enter your email above, then click "Forgot password?".');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      await sendPasswordResetEmail(auth, email);
+      setSuccess('Password reset email sent. Please check your inbox.');
+    } catch (err: any) {
+      console.error('[AUTH_MODAL] password reset error:', err);
+      setError(err.message || 'Failed to send password reset email.');
     } finally {
       setLoading(false);
     }
@@ -185,22 +256,50 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
 
   const sendOtp = async () => {
     try {
+      setError(null);
+      setSuccess(null);
+
       const raw = identifier.trim();
       if (!looksLikePhone(raw)) {
-        alert('Enter a valid phone number.');
+        setError('Enter a valid phone number.');
         return;
+      }
+
+      // For sign-up, enforce password + confirm
+      if (isSignUp) {
+        if (!password) {
+          setError('Create a password first.');
+          return;
+        }
+        if (!confirmPassword) {
+          setError('Please confirm your password.');
+          return;
+        }
+        if (password !== confirmPassword) {
+          setError('Passwords do not match.');
+          return;
+        }
       }
 
       setLoading(true);
       const e164 = normalizePhoneToE164(raw);
+
+      // If user is trying to sign up with a phone that already has a profile, stop them
+      const prof = await findProfileByPhone(e164);
+      if (isSignUp && prof) {
+        setLoading(false);
+        setError(
+          'An account with this phone number already exists. Please sign in instead.'
+        );
+        return;
+      }
 
       const verifier = await ensureRecaptcha();
       const confirmation = await signInWithPhoneNumber(auth, e164, verifier);
       confirmationRef.current = confirmation;
       setOtpSent(true);
 
-      // Check if that phone already maps to an existing profile with email
-      const prof = await findProfileByPhone(e164);
+      // For existing profiles, we may need to link with email
       if (prof?.email) {
         setLinkingInfo({ email: prof.email });
       } else {
@@ -208,7 +307,7 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
       }
     } catch (err: any) {
       console.error('[AUTH_MODAL] sendOtp error:', err);
-      alert(err.message || 'Failed to send code. Please try again.');
+      setError(err.message || 'Failed to send code. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -216,12 +315,15 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
 
   const confirmOtp = async () => {
     try {
+      setError(null);
+      setSuccess(null);
+
       if (!confirmationRef.current) {
-        alert('Please request a code first.');
+        setError('Please request a code first.');
         return;
       }
       if (!otpCode.trim()) {
-        alert('Enter the code you received.');
+        setError('Enter the code you received.');
         return;
       }
 
@@ -240,7 +342,7 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
       if (linkingInfo?.email) {
         if (!linkPassword) {
           setLoading(false);
-          alert('Enter the password for ' + linkingInfo.email);
+          setError('Enter the password for ' + linkingInfo.email);
           return;
         }
 
@@ -261,7 +363,7 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
       onClose();
     } catch (err: any) {
       console.error('[AUTH_MODAL] confirmOtp error:', err);
-      alert(err.message || 'Verification failed. Please try again.');
+      setError(err.message || 'Verification failed. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -303,7 +405,7 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
           or use your email / phone
         </div>
 
-        {/* Identifier (email OR phone) */}
+        {/* Identifier + password(s) */}
         <div className="space-y-3 text-left">
           <input
             className="w-full px-3 py-2 border rounded-md text-gray-800 bg-white"
@@ -312,17 +414,29 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
             onChange={(e) => setIdentifier(e.target.value)}
           />
 
+          {/* Password (always visible) */}
+          <input
+            className="w-full px-3 py-2 border rounded-md text-gray-800 bg-white"
+            placeholder="Password"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+
+          {/* Confirm password (sign up only) */}
+          {isSignUp && (
+            <input
+              className="w-full px-3 py-2 border rounded-md text-gray-800 bg-white"
+              placeholder="Confirm password"
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+            />
+          )}
+
           {/* -------- EMAIL MODE -------- */}
           {isEmailLike && (
             <>
-              <input
-                className="w-full px-3 py-2 border rounded-md text-gray-800 bg-white"
-                placeholder="Password"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-
               <button
                 onClick={handleEmailSubmit}
                 disabled={loading}
@@ -336,6 +450,18 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
                   ? 'Create Account'
                   : 'Sign In'}
               </button>
+
+              {!isSignUp && (
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={handleForgotPassword}
+                    className="text-xs text-emerald-700 hover:underline"
+                  >
+                    Forgot password?
+                  </button>
+                </div>
+              )}
             </>
           )}
 
@@ -390,15 +516,12 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
                       ? 'Verifying…'
                       : linkingInfo?.email
                       ? 'Verify & Link'
+                      : isSignUp
+                      ? 'Verify & Sign Up'
                       : 'Verify & Sign In'}
                   </button>
                 </>
               )}
-
-              <p className="text-xs text-gray-500 text-center mt-1">
-                You can sign in again later using the same phone number. No email
-                is required.
-              </p>
             </>
           )}
 
@@ -410,7 +533,19 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
             </p>
           )}
 
-          {/* 🔄 Global email sign-in/sign-up toggle – always visible */}
+          {/* Inline banners */}
+          {error && (
+            <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-2 py-1 mt-1">
+              {error}
+            </div>
+          )}
+          {success && (
+            <div className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-1 mt-1">
+              {success}
+            </div>
+          )}
+
+          {/* 🔄 Global email/phone sign-in/sign-up toggle – always visible */}
           <p className="text-sm text-center mt-2">
             {isSignUp ? 'Already have an account?' : "Don’t have an account?"}{' '}
             <button
