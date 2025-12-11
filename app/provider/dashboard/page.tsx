@@ -92,8 +92,20 @@ export default function ProviderDashboard() {
     () => new Date(),
   );
 
-  // Utility: date → YYYY-MM-DD (same as bookings use)
-  const dateToISO = (d: Date) => d.toISOString().split('T')[0];
+  // ---------- Date helpers (LOCAL, no timezone shift) ----------
+  // Convert Date -> "YYYY-MM-DD" based on local calendar day
+  const dateToISO = (d: Date) => {
+    const year = d.getFullYear();
+    const month = `${d.getMonth() + 1}`.padStart(2, '0');
+    const day = `${d.getDate()}`.padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  // Parse "YYYY-MM-DD" into a local Date (no UTC interpretation)
+  const parseISODate = (iso: string): Date => {
+    const [y, m, d] = iso.split('-').map(Number);
+    return new Date(y, m - 1, d);
+  };
 
   const isPastDay = (d: Date) => {
     const today = new Date();
@@ -220,8 +232,6 @@ export default function ProviderDashboard() {
       }));
 
       // ✅ Treat initiated/pending/processing as already deducted from available balance.
-      // Once a withdrawal is initiated, the amount is no longer "available" even if
-      // the M-Pesa callback hasn't flipped it to success yet.
       totalWithdrawn = snap.docs.reduce((sum, d) => {
         const data = d.data() as any;
         const status = (data.status || '').toLowerCase();
@@ -498,12 +508,18 @@ export default function ProviderDashboard() {
       return;
     }
 
-    const iso = dateToISO(date);
+    const iso = dateToISO(date); // local-safe
     const currentlyAway = awayDates.includes(iso);
     const ref = doc(db, 'users', user.uid, 'awayDays', iso);
+    const humanLabel = date.toDateString();
 
-    // Removing away day
+    // Removing away day (with confirmation)
     if (currentlyAway) {
+      const ok = window.confirm(
+        `Remove ${humanLabel} as a day off and allow bookings again on this date?`,
+      );
+      if (!ok) return;
+
       try {
         await deleteDoc(ref);
       } catch (err) {
@@ -539,7 +555,7 @@ export default function ProviderDashboard() {
         const ok = window.confirm(
           `You already have ${conflictCount} active booking${
             conflictCount === 1 ? '' : 's'
-          } on ${iso}.\n\nTo block this day off completely, you need to cancel or reschedule those bookings from your bookings page.\n\nOpen your bookings page now?`,
+          } on ${humanLabel}.\n\nTo block this day off completely, you need to cancel or reschedule those bookings from your bookings page.\n\nOpen your bookings page now?`,
         );
         if (ok) {
           router.push('/creator/bookings');
@@ -547,6 +563,12 @@ export default function ProviderDashboard() {
         // Do NOT create away day if there are active bookings
         return;
       }
+
+      // Confirm marking as unavailable
+      const confirmAway = window.confirm(
+        `Mark ${humanLabel} as unavailable for bookings? Clients will not be able to book you on this date.`,
+      );
+      if (!confirmAway) return;
 
       // No conflicting bookings — create the away day
       await setDoc(ref, {
@@ -575,7 +597,7 @@ export default function ProviderDashboard() {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     return awayDates
-      .map((d) => ({ date: d, asDate: new Date(d) }))
+      .map((d) => ({ date: d, asDate: parseISODate(d) }))
       .filter((x) => x.asDate.getTime() >= today.getTime())
       .sort((a, b) => a.asDate.getTime() - b.asDate.getTime());
   })();
@@ -652,7 +674,7 @@ export default function ProviderDashboard() {
               <div className="mt-3 max-h-56 overflow-auto border-t pt-2 text-xs text-gray-700 space-y-1">
                 {pendingBookings.map((b) => {
                   const dateStr = b.date
-                    ? new Date(b.date).toLocaleDateString()
+                    ? parseISODate(b.date).toLocaleDateString()
                     : '-';
                   const timeStr = b.time || '-';
                   const amount = providerShare(b);
