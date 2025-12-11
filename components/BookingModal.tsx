@@ -1213,6 +1213,11 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
               )}
             </>
           )}
+
+          {/* Guvoel Digital footer */}
+          <p className="mt-6 text-[10px] text-gray-400 text-center">
+            Guvoel Digital © 2025
+          </p>
         </div>
       </div>
 

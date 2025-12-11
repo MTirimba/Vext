@@ -336,17 +336,6 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
                   ? 'Create Account'
                   : 'Sign In'}
               </button>
-
-              <p className="text-sm text-center">
-                {isSignUp ? 'Already have an account?' : "Don't have an account?"}{' '}
-                <button
-                  onClick={toggleMode}
-                  className="text-emerald-700 hover:underline"
-                  type="button"
-                >
-                  {isSignUp ? 'Sign in' : 'Sign up'}
-                </button>
-              </p>
             </>
           )}
 
@@ -420,6 +409,18 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
               07XXXXXXXX or +2547XXXXXXXX).
             </p>
           )}
+
+          {/* 🔄 Global email sign-in/sign-up toggle – always visible */}
+          <p className="text-sm text-center mt-2">
+            {isSignUp ? 'Already have an account?' : "Don’t have an account?"}{' '}
+            <button
+              onClick={toggleMode}
+              className="text-emerald-700 hover:underline"
+              type="button"
+            >
+              {isSignUp ? 'Sign in' : 'Sign up'}
+            </button>
+          </p>
 
           {/* Invisible reCAPTCHA anchor for phone sign-in */}
           <div id="recaptcha-container" />

@@ -412,6 +412,11 @@ export default function WithdrawModal({ available, onClose }: WithdrawModalProps
             </button>
           </form>
         )}
+
+        {/* Guvoel Digital footer */}
+        <p className="mt-6 text-[10px] text-gray-400 text-center">
+          Guvoel Digital © 2025
+        </p>
       </div>
     </div>
   );

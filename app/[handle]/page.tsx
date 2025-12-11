@@ -209,9 +209,12 @@ export default function BusinessHandlePage() {
     );
   }, [profile]);
 
-  // For business profile, prefer business avatar, then fall back to personal
+  // For business profile, prefer business avatar, then fall back to personal,
+  // then fall back to the VextUp icon if nothing is uploaded.
   const avatarUrl =
-    profile?.businessProfilePhoto || profile?.profilePhoto || '';
+    profile?.businessProfilePhoto ||
+    profile?.profilePhoto ||
+    '/vextup-icon.png';
 
   const { fullAddress, mapsHref } = useMemo(() => {
     if (!profile) return { fullAddress: '', mapsHref: '' };
@@ -917,12 +920,6 @@ export default function BusinessHandlePage() {
                             <span className="font-semibold">
                               KSHS {base.toLocaleString()}
                             </span>
-                            {' · '}
-                            Clients currently see approx.{` `}
-                            <span className="font-semibold">
-                              KSHS {displayed.toLocaleString()}
-                            </span>{' '}
-                            (includes platform fee based on price bracket).
                           </>
                         ) : (
                           <>
@@ -964,14 +961,6 @@ export default function BusinessHandlePage() {
                   </div>
                 );
               })}
-
-              {isOwner && servicesOffered.length > 0 && (
-                <p className="mt-2 text-[11px] text-gray-500">
-                  Clients see your prices with a small platform fee added on top
-                  (the exact percentage depends on the price bracket). You still
-                  receive the base price you set here.
-                </p>
-              )}
             </div>
           </div>
         </div>
@@ -1012,9 +1001,8 @@ export default function BusinessHandlePage() {
                 />
               </div>
               <p className="mt-1 text-[11px] text-gray-500">
-                Clients see this with a small platform fee added on top. The
-                percentage varies by price bracket, but you still receive the
-                base price you set here.
+                This is the amount you charge your client for this service. You
+                can update it anytime.
               </p>
             </label>
 
