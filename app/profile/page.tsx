@@ -242,9 +242,10 @@ export default function ProfilePage() {
         }
       }
 
+      // ⚠️ IMPORTANT:
+      // Do NOT always send username / businessUsername here, or you'll violate usernameUnchanged().
+      // Only include them when they're being set the first time.
       const updates: any = {
-        username: cleanedUsername,
-        usernameLower: cleanedUsername, // helpful for case-insensitive queries
         fullName,
         phone,
         email,
@@ -253,13 +254,34 @@ export default function ProfilePage() {
         isProvider,
       };
 
+      // Geo (optional)
+      if (lat != null && lng != null) {
+        updates.lat = lat;
+        updates.lng = lng;
+        updates.street = street;
+        updates.town = town;
+        updates.county = county;
+      }
+
+      // First-time personal username: include it so hasUsername() passes
+      if (!originalUsername) {
+        updates.username = cleanedUsername;
+        updates.usernameLower = cleanedUsername;
+      }
+      // If originalUsername exists, we rely on existing doc username and DO NOT touch it,
+      // so usernameUnchanged() passes and hasUsername(request.resource.data) still holds.
+
       if (isProvider) {
-        updates.businessUsername = cleanedBusinessUsername;
-        updates.businessUsernameLower = cleanedBusinessUsername;
         updates.businessPhone = businessPhone;
         updates.businessName = businessName;
         updates.services = services;
         updates.bio = bio;
+
+        // Only set businessUsername client-side the first time
+        if (!originalBusinessUsername) {
+          updates.businessUsername = cleanedBusinessUsername;
+          updates.businessUsernameLower = cleanedBusinessUsername;
+        }
 
         // only include schedule fields when provider
         updates.businessHours = businessHours;
