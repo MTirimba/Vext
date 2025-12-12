@@ -585,8 +585,11 @@ export default function AdminPage() {
                   <th className="py-2 pr-4">Full Name</th>
                   <th className="py-2 pr-4">Username</th>
                   <th className="py-2 pr-4">Email</th>
+                  <th className="py-2 pr-4">Phone</th>
                   <th className="py-2 pr-4">Role</th>
                   <th className="py-2 pr-4">Provider?</th>
+                  <th className="py-2 pr-4">Joined</th>
+                  <th className="py-2 pr-4">Sign up via</th>
                 </tr>
               </thead>
               <tbody>
@@ -602,10 +605,19 @@ export default function AdminPage() {
                       {u.email || '-'}
                     </td>
                     <td className="py-2 pr-4">
+                      {u.businessPhone || u.phone || '-'}
+                    </td>
+                    <td className="py-2 pr-4">
                       {u.role || '-'}
                     </td>
                     <td className="py-2 pr-4">
                       {u.isProvider ? 'Yes' : 'No'}
+                    </td>
+                    <td className="py-2 pr-4 whitespace-nowrap">
+                      {formatDateTime(u.createdAt)}
+                    </td>
+                    <td className="py-2 pr-4">
+                      {inferSignupMethod(u)}
                     </td>
                   </tr>
                 ))}
@@ -626,6 +638,8 @@ export default function AdminPage() {
                   <th className="py-2 pr-4">Username</th>
                   <th className="py-2 pr-4">Phone</th>
                   <th className="py-2 pr-4">Town/County</th>
+                  <th className="py-2 pr-4">Joined</th>
+                  <th className="py-2 pr-4">Sign up via</th>
                 </tr>
               </thead>
               <tbody>
@@ -643,6 +657,12 @@ export default function AdminPage() {
                     <td className="py-2 pr-4">
                       {[u.town, u.county].filter(Boolean).join(', ') ||
                         '-'}
+                    </td>
+                    <td className="py-2 pr-4 whitespace-nowrap">
+                      {formatDateTime(u.createdAt)}
+                    </td>
+                    <td className="py-2 pr-4">
+                      {inferSignupMethod(u)}
                     </td>
                   </tr>
                 ))}
@@ -1116,4 +1136,47 @@ function KpiCard({
       <div className="text-2xl font-bold">{value}</div>
     </div>
   );
+}
+
+/**
+ * Format a createdAt value that might be:
+ * - Firestore Timestamp
+ * - number (ms)
+ * - ISO/string
+ */
+function formatDateTime(val: any): string {
+  if (!val) return '—';
+
+  let date: Date | null = null;
+
+  if (val?.toDate?.() instanceof Date) {
+    date = val.toDate();
+  } else if (typeof val === 'number') {
+    date = new Date(val);
+  } else if (typeof val === 'string') {
+    const parsed = new Date(val);
+    if (!isNaN(parsed.getTime())) date = parsed;
+  }
+
+  return date ? date.toLocaleString() : '—';
+}
+
+/**
+ * Guess what the user signed up with (email or phone)
+ * Falls back to "Unknown" if we can't tell.
+ */
+function inferSignupMethod(u: any): string {
+  if (u.authProvider) {
+    // If you ever store this, show it directly
+    return u.authProvider;
+  }
+
+  const hasEmail = !!u.email;
+  const hasPhone = !!(u.businessPhone || u.phone);
+
+  if (hasEmail && hasPhone) return 'Email & Phone';
+  if (hasEmail) return 'Email';
+  if (hasPhone) return 'Phone';
+
+  return 'Unknown';
 }
