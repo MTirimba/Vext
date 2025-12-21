@@ -93,7 +93,7 @@ function getMarkupPercent(basePrice: number, config?: MarkupConfig | null) {
   const tier = cfg.tiers.find(
     (t) => basePrice >= t.min && (t.max == null || basePrice <= t.max),
   );
-  return tier ? t.percent : 0;
+  return tier ? tier.percent : 0;
 }
 
 function applyMarkup(basePrice: number, config?: MarkupConfig | null) {
