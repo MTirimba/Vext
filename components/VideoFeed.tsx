@@ -93,7 +93,7 @@ function getMarkupPercent(basePrice: number, config?: MarkupConfig | null) {
   const tier = cfg.tiers.find(
     (t) => basePrice >= t.min && (t.max == null || basePrice <= t.max),
   );
-  return tier ? tier.percent : 0;
+  return tier ? t.percent : 0;
 }
 
 function applyMarkup(basePrice: number, config?: MarkupConfig | null) {
@@ -1034,7 +1034,13 @@ export default function VideoFeed() {
   };
 
   return (
-    <div className="relative h-screen min-h-[100dvh] w-full bg-black text-white overflow-hidden">
+    <div
+      className="relative h-screen min-h-[100dvh] w-full bg-black text-white overflow-hidden"
+      style={{
+        // Respect iOS safe area and still give some breathing room on Android
+        paddingBottom: "env(safe-area-inset-bottom, 0px)",
+      }}
+    >
       {/* Top-right controls */}
       <div
         className="absolute right-3 z-50 flex items-center space-x-2"
@@ -1540,8 +1546,9 @@ export default function VideoFeed() {
                   <div
                     className="absolute left-1/2 -translate-x-1/2 z-50 flex space-x-1"
                     style={{
+                      // move dot indicators above nav bar / gesture area
                       bottom:
-                        "calc(env(safe-area-inset-bottom, 0px) + 0.75rem)",
+                        "calc(env(safe-area-inset-bottom, 0px) + 3.25rem)",
                     }}
                   >
                     {media.map((_, idx) => (
@@ -1581,11 +1588,13 @@ export default function VideoFeed() {
                 </span>
               </div>
 
+              {/* Right-hand buttons + Book Service */}
               <div
                 className="pointer-events-auto absolute right-3 flex flex-col items-end space-y-3 z-50"
                 style={{
+                  // push controls well above Android nav bar and iOS home pill
                   bottom:
-                    "calc(env(safe-area-inset-bottom, 0px) + 1.5rem)",
+                    "calc(env(safe-area-inset-bottom, 0px) + 4.5rem)",
                 }}
               >
                 <button onClick={() => handleLike(v.id)} className="text-xl">
@@ -1644,8 +1653,9 @@ export default function VideoFeed() {
                 <div
                   className="absolute left-3 max-w-[60%] overflow-hidden text-ellipsis z-50"
                   style={{
+                    // keep title/description/price aligned with buttons
                     bottom:
-                      "calc(env(safe-area-inset-bottom, 0px) + 1.5rem)",
+                      "calc(env(safe-area-inset-bottom, 0px) + 4.5rem)",
                   }}
                 >
                   {v.title && (

@@ -24,6 +24,8 @@ import {
   parseMarkupTiers,
 } from '@/lib/pricing';
 
+import WithdrawModal from '@/components/WithdrawModal';
+
 type TabKey =
   | 'overview'
   | 'users'
@@ -67,6 +69,9 @@ export default function AdminPage() {
   const [paidBookings, setPaidBookings] = useState<any[]>([]);
   const [clientPaymentSummary, setClientPaymentSummary] = useState<any[]>([]);
   const [payouts, setPayouts] = useState<any[]>([]);
+
+  // Admin/platform withdrawal modal
+  const [showPlatformWithdraw, setShowPlatformWithdraw] = useState(false);
 
   // ---------- Initial load: KPIs + recent bookings (with joined names)
   useEffect(() => {
@@ -162,7 +167,7 @@ export default function AdminPage() {
           const data = snap.data() as any;
           setMarkupTiers(parseMarkupTiers(data.tiers));
         } else {
-          setMarkupTiers(DEFAULT_MARKUP_TIERS);
+          setMarkupTiers(DEFAULT_MARKUP_Tiers);
         }
       } catch (err) {
         console.error('admin pricing config load error', err);
@@ -777,8 +782,24 @@ export default function AdminPage() {
             directly instead of estimating.
           </p>
 
+          {/* Platform withdrawal */}
+          <div className="mt-4">
+            <button
+              type="button"
+              onClick={() => setShowPlatformWithdraw(true)}
+              disabled={appRevenue <= 0}
+              className="rounded bg-gray-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Withdraw App Revenue
+            </button>
+            <p className="mt-1 text-xs text-gray-500 max-w-xl">
+              This uses the same M-Pesa withdrawal flow as the wallet,
+              with your estimated app revenue as the available balance.
+            </p>
+          </div>
+
           {/* Finance sub-tabs */}
-          <div className="mt-6">
+          <div className="mt-8">
             <div className="mb-3 flex gap-2 border-b text-sm">
               <button
                 type="button"
@@ -1096,6 +1117,14 @@ export default function AdminPage() {
           </p>
         </div>
       )}
+
+      {/* Platform withdrawal modal */}
+      {showPlatformWithdraw && (
+        <WithdrawModal
+          available={appRevenue}
+          onClose={() => setShowPlatformWithdraw(false)}
+        />
+      )}
     </div>
   );
 }
@@ -1167,7 +1196,6 @@ function formatDateTime(val: any): string {
  */
 function inferSignupMethod(u: any): string {
   if (u.authProvider) {
-    // If you ever store this, show it directly
     return u.authProvider;
   }
 
