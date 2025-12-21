@@ -9,6 +9,8 @@ import {
   onSnapshot,
   orderBy,
   query,
+  doc,
+  getDoc,
 } from 'firebase/firestore';
 
 import WithdrawModal from '@/components/WithdrawModal';
@@ -34,6 +36,33 @@ export default function ClientWalletPage() {
   const [showDeposit, setShowDeposit] = useState(false);
   const [showWithdraw, setShowWithdraw] = useState(false);
 
+  // Whether this user is also a service provider
+  const [isProvider, setIsProvider] = useState(false);
+
+  // Load user role so we can explain that this wallet is personal-only
+  useEffect(() => {
+    if (!user) {
+      setIsProvider(false);
+      return;
+    }
+
+    const userRef = doc(db, 'users', user.uid);
+    getDoc(userRef)
+      .then((snap) => {
+        if (!snap.exists()) {
+          setIsProvider(false);
+          return;
+        }
+        const data = snap.data() as any;
+        // Support both legacy and new flags
+        const providerFlag = !!(data.isProvider || data.isServiceProvider);
+        setIsProvider(providerFlag);
+      })
+      .catch(() => {
+        setIsProvider(false);
+      });
+  }, [user]);
+
   useEffect(() => {
     if (!user) return;
 
@@ -49,13 +78,19 @@ export default function ClientWalletPage() {
       setTransactions(txs);
 
       // Compute balance using completed transactions only
-      const newBalance = txs.reduce((sum, tx) => {
+      const rawBalance = txs.reduce((sum, tx) => {
         if ((tx.status || '').toLowerCase() !== 'completed') return sum;
         const amt = Number(tx.amount) || 0;
         return sum + (tx.type === 'credit' ? amt : -amt);
       }, 0);
 
-      setBalance(newBalance);
+      // ✅ Personal wallet should never be negative. If we ever
+      // see a negative number here (e.g. provider business payout
+      // accidentally recorded as a wallet debit), clamp it to zero
+      // so personal and business funds stay visually separated.
+      const safeBalance = rawBalance < 0 ? 0 : rawBalance;
+
+      setBalance(safeBalance);
       setLoading(false);
     });
 
@@ -91,7 +126,9 @@ export default function ClientWalletPage() {
 
   return (
     <div className="p-6 max-w-2xl mx-auto">
-      <h1 className="text-2xl font-bold mb-4">My Wallet</h1>
+      <h1 className="text-2xl font-bold mb-4">
+        {isProvider ? 'My Personal Wallet' : 'My Wallet'}
+      </h1>
 
       {/* Balance card */}
       <div className="p-5 bg-white shadow rounded mb-6">
@@ -102,10 +139,22 @@ export default function ClientWalletPage() {
           KSH {balance.toFixed(2)}
         </p>
         <p className="text-xs text-gray-500 mt-2">
-          Funds appear here when a service provider rejects a paid booking,
-          when you cancel an eligible paid booking, or when you deposit money
-          into your wallet. You can use this balance to pay for new services
-          or withdraw it to M-Pesa.
+          {isProvider ? (
+            <>
+              This is your <strong>personal wallet</strong> on VextUp. It holds
+              money you deposit here yourself and refunds from bookings you make
+              as a client. It is completely{' '}
+              <strong>separate from your provider earnings</strong> and
+              withdrawals shown in the Provider Dashboard.
+            </>
+          ) : (
+            <>
+              Funds appear here when a service provider rejects a paid booking,
+              when you cancel an eligible paid booking, or when you deposit
+              money into your wallet. You can use this balance to pay for new
+              services or withdraw it to M-Pesa.
+            </>
+          )}
         </p>
 
         {/* Actions */}
