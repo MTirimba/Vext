@@ -167,7 +167,7 @@ export default function AdminPage() {
           const data = snap.data() as any;
           setMarkupTiers(parseMarkupTiers(data.tiers));
         } else {
-          setMarkupTiers(DEFAULT_MARKUP_Tiers);
+          setMarkupTiers(DEFAULT_MARKUP_TIERS);
         }
       } catch (err) {
         console.error('admin pricing config load error', err);
