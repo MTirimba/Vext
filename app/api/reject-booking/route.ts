@@ -1,6 +1,7 @@
 // /app/api/reject-booking/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
+import { requireAuth } from "@/lib/requireAuth";
 
 /**
  * Provider rejects a booking.
@@ -11,7 +12,11 @@ import { adminDb } from "@/lib/firebaseAdmin";
  */
 export async function POST(req: NextRequest) {
   try {
-    const { bookingId, providerId: callerProviderId, reason } = await req.json();
+    // 🔐 Must be signed in — identity comes from the verified token, not the body
+    const auth = await requireAuth(req);
+    if (auth instanceof NextResponse) return auth;
+
+    const { bookingId, reason } = await req.json();
 
     if (!bookingId) {
       return NextResponse.json(
@@ -41,8 +46,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Basic auth safety: if caller sent providerId, it must match
-    if (callerProviderId && callerProviderId !== providerId) {
+    // 🔐 Only the provider who owns this booking may reject it
+    if (auth.uid !== providerId) {
       return NextResponse.json(
         { error: "You are not allowed to reject this booking" },
         { status: 403 },

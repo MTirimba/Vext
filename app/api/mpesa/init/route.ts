@@ -1,6 +1,7 @@
 // /app/api/mpesa/init/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
+import { appendCallbackSecret } from "@/lib/mpesaCallbackSecret";
 
 // 🧹 Utility: sanitize phone number into Safaricom’s 2547XXXXXXXX format
 function sanitizePhone(phone: string): string {
@@ -96,10 +97,11 @@ export async function POST(req: NextRequest) {
     const tillNumber =
       process.env.MPESA_TILL?.trim() || "5695090"; // Till number (PartyB)
 
-    const callbackUrl =
+    const callbackUrl = appendCallbackSecret(
       env("CALLBACK_URL") ||
-      process.env.MPESA_CALLBACK_URL ||
-      "https://vextup.com/api/mpesa/callback";
+        process.env.MPESA_CALLBACK_URL ||
+        "https://vextup.com/api/mpesa/callback",
+    );
 
     const baseUrl =
       process.env.MPESA_ENV === "live"

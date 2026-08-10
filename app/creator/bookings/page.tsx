@@ -275,12 +275,15 @@ export default function CreatorBookings() {
     // ❌ Rejection → handled centrally via /api/reject-booking
     if (status === "rejected") {
       try {
+        const rejectIdToken = await auth.currentUser?.getIdToken();
         const res = await fetch("/api/reject-booking", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...(rejectIdToken ? { Authorization: `Bearer ${rejectIdToken}` } : {}),
+          },
           body: JSON.stringify({
             bookingId: id,
-            providerId: booking.providerId,
           }),
         });
 

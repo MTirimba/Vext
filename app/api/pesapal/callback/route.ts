@@ -1,6 +1,7 @@
 // /app/api/pesapal/callback/route.ts
 import { NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
+import { confirmBookingCore } from "@/lib/confirmBookingCore";
 
 export async function GET(req: Request) {
   try {
@@ -62,22 +63,20 @@ export async function GET(req: Request) {
     if (bookingId) {
       await adminDb.collection("bookings").doc(bookingId).update({ payment_status: status });
 
-      // ✅ Automatically confirm booking if payment completed
+      // ✅ Automatically confirm booking if payment completed.
+      // We've already verified this server-to-server with Pesapal above
+      // (verifyData came from Pesapal's own GetTransactionStatus API), so
+      // it's safe to confirm directly here without an end-user auth token —
+      // going through the public /api/confirm-booking HTTP route isn't
+      // appropriate here since that route requires a signed-in client.
       if (status.toLowerCase() === "completed") {
         try {
-          const confirmRes = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL}/api/confirm-booking`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              bookingId,
-              providerId: verifyData?.providerId || null,
-              date: verifyData?.created_date?.split("T")[0],
-              time: verifyData?.created_date?.split("T")[1]?.substring(0, 5),
-              duration: 60,
-            }),
+          const result = await confirmBookingCore({
+            bookingId,
+            paymentRef: orderTrackingId,
+            method: "pesapal",
           });
-          const confirmData = await confirmRes.json();
-          console.log("✅ Booking confirmation:", confirmData);
+          console.log("✅ Booking confirmation:", result.body);
         } catch (confirmErr) {
           console.error("⚠️ Auto-confirm booking failed:", confirmErr);
         }

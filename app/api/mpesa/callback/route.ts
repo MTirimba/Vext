@@ -1,11 +1,18 @@
 // /workspaces/Vext/app/api/mpesa/callback/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
+import { verifyCallbackSecret } from "@/lib/mpesaCallbackSecret";
 
 export const runtime = "nodejs";
 
 export async function POST(req: NextRequest) {
   console.log("📥 [M-PESA STK CALLBACK] HIT /api/mpesa/callback");
+
+  // 🔐 Reject anything that doesn't carry our shared secret — Safaricom
+  // itself will always include it, since we embed it in the CallBackURL
+  // we register with them in /api/mpesa/init.
+  const rejection = verifyCallbackSecret(req);
+  if (rejection) return rejection;
 
   let body: any = {};
   try {

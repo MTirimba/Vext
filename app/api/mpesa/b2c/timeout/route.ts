@@ -1,11 +1,16 @@
 // /workspaces/Vext/app/api/mpesa/b2c/timeout/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { adminDb } from '@/lib/firebaseAdmin';
+import { verifyCallbackSecret } from '@/lib/mpesaCallbackSecret';
 
 export const runtime = 'nodejs';
 
 export async function POST(req: NextRequest) {
   console.log('⏰ [M-PESA B2C TIMEOUT] HIT /api/mpesa/b2c/timeout');
+
+  // 🔐 Reject anything that doesn't carry our shared secret
+  const rejection = verifyCallbackSecret(req);
+  if (rejection) return rejection;
 
   let body: any = {};
   try {

@@ -334,12 +334,15 @@ export default function ClientBookings() {
     if (!confirm("Are you sure you want to cancel this booking?")) return;
 
     try {
+      const cancelIdToken = await auth.currentUser?.getIdToken();
       const res = await fetch("/api/cancel-booking", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(cancelIdToken ? { Authorization: `Bearer ${cancelIdToken}` } : {}),
+        },
         body: JSON.stringify({
           bookingId: id,
-          clientId: user?.uid,
         }),
       });
 

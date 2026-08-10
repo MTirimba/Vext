@@ -615,9 +615,13 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
         clientInstructions: clientInstructions.trim() || undefined,
       };
 
+      const saveIdToken = await auth.currentUser?.getIdToken();
       const saveRes = await fetch("/api/save-booking", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(saveIdToken ? { Authorization: `Bearer ${saveIdToken}` } : {}),
+        },
         body: JSON.stringify(bookingData),
       });
       const saveData = await saveRes.json();
@@ -635,9 +639,15 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
       // 💰 WALLET FLOW
       if (paymentMethod === "wallet") {
         try {
+          const walletIdToken = await auth.currentUser?.getIdToken();
           const confirmRes = await fetch("/api/confirm-booking", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+              ...(walletIdToken
+                ? { Authorization: `Bearer ${walletIdToken}` }
+                : {}),
+            },
             body: JSON.stringify({
               bookingId,
               method: "wallet",
@@ -724,9 +734,15 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
           callback(response: any) {
             (async () => {
               try {
+                const paystackIdToken = await auth.currentUser?.getIdToken();
                 await fetch("/api/confirm-booking", {
                   method: "POST",
-                  headers: { "Content-Type": "application/json" },
+                  headers: {
+                    "Content-Type": "application/json",
+                    ...(paystackIdToken
+                      ? { Authorization: `Bearer ${paystackIdToken}` }
+                      : {}),
+                  },
                   body: JSON.stringify({
                     bookingId,
                     paymentRef: response.reference,

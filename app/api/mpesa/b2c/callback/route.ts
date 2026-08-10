@@ -1,11 +1,16 @@
 // /workspaces/Vext/app/api/mpesa/b2c/callback/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
+import { verifyCallbackSecret } from "@/lib/mpesaCallbackSecret";
 
 export const runtime = "nodejs";
 
 export async function POST(req: NextRequest) {
   console.log("📥 [M-PESA B2C CALLBACK] HIT /api/mpesa/b2c/callback");
+
+  // 🔐 Reject anything that doesn't carry our shared secret
+  const rejection = verifyCallbackSecret(req);
+  if (rejection) return rejection;
 
   let body: any = {};
   try {

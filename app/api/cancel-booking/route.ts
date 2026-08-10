@@ -1,6 +1,7 @@
 // /app/api/cancel-booking/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
+import { requireAuth } from "@/lib/requireAuth";
 
 /**
  * Client cancels a booking.
@@ -10,7 +11,11 @@ import { adminDb } from "@/lib/firebaseAdmin";
  */
 export async function POST(req: NextRequest) {
   try {
-    const { bookingId, clientId: callerClientId, reason } = await req.json();
+    // 🔐 Must be signed in — identity comes from the verified token, not the body
+    const auth = await requireAuth(req);
+    if (auth instanceof NextResponse) return auth;
+
+    const { bookingId, reason } = await req.json();
 
     if (!bookingId) {
       return NextResponse.json(
@@ -40,8 +45,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Basic auth safety: if caller sent clientId, it must match
-    if (callerClientId && callerClientId !== clientId) {
+    // 🔐 Only the client who owns this booking may cancel it
+    if (auth.uid !== clientId) {
       return NextResponse.json(
         { error: "You are not allowed to cancel this booking" },
         { status: 403 },

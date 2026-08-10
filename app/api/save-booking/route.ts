@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
+import { requireAuth } from "@/lib/requireAuth";
 import crypto from "crypto";
 
 // helper: generate short code like "42AB"
@@ -81,6 +82,10 @@ function normalizeNumbersFromBody(body: any) {
  */
 export async function POST(req: NextRequest) {
   try {
+    // 🔐 Must be signed in — identity comes from the verified token
+    const auth = await requireAuth(req);
+    if (auth instanceof NextResponse) return auth;
+
     const body = await req.json();
     const {
       bookingId,
@@ -102,6 +107,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         { error: "Missing required fields" },
         { status: 400 },
+      );
+    }
+
+    // 🔐 The signed-in user can only create/edit their own bookings as a client
+    if (auth.uid !== clientId) {
+      return NextResponse.json(
+        { error: "You can only manage your own bookings" },
+        { status: 403 },
       );
     }
 
@@ -140,6 +153,15 @@ export async function POST(req: NextRequest) {
       }
 
       const existing = existingSnap.data() as any;
+
+      // 🔐 Prevent editing someone else's booking by pointing bookingId at it
+      // while claiming a different (your own) clientId in the body
+      if (existing.clientId !== auth.uid) {
+        return NextResponse.json(
+          { error: "You can only manage your own bookings" },
+          { status: 403 },
+        );
+      }
 
       // Free up previous slot if date/time changed
       if (existing.time !== time || existing.date !== date) {

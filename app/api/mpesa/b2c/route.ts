@@ -1,6 +1,9 @@
 // /workspaces/Vext/app/api/mpesa/b2c/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
+import { requireAuth } from "@/lib/requireAuth";
+import { getProviderAvailableBalance } from "@/lib/providerBalance";
+import { appendCallbackSecret } from "@/lib/mpesaCallbackSecret";
 
 export const runtime = "nodejs";
 
@@ -89,6 +92,12 @@ async function getAccessToken() {
 
 export async function POST(req: NextRequest) {
   try {
+    // 🔐 Require a valid Firebase ID token, and make sure the caller IS the
+    // provider they claim to be withdrawing for. Without this, anyone could
+    // POST here with any provider's userId/phone and trigger a real payout.
+    const auth = await requireAuth(req);
+    if (auth instanceof NextResponse) return auth;
+
     const body = await req.json();
     console.log("[M-Pesa B2C] Incoming /api/mpesa/b2c request body:", body);
 
@@ -124,6 +133,49 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         { error: "userId and withdrawalId are required." },
         { status: 400 }
+      );
+    }
+
+    if (auth.uid !== userId) {
+      console.warn("[M-Pesa B2C] Auth uid does not match requested userId", {
+        authUid: auth.uid,
+        userId,
+      });
+      return NextResponse.json(
+        { error: "You can only withdraw from your own account." },
+        { status: 403 }
+      );
+    }
+
+    // 💰 Server-side balance check — mirrors the dashboard's own math, so a
+    // provider still sees exactly the number they expect, but now it's
+    // actually enforced before we call Safaricom with real money.
+    const available = await getProviderAvailableBalance(userId);
+    if (amount > available + 0.5) {
+      console.warn("[M-Pesa B2C] Amount exceeds available balance", {
+        userId,
+        amount,
+        available,
+      });
+
+      // Keep the withdrawal doc the client already created in a clean state
+      try {
+        await adminDb
+          .doc(`users/${userId}/withdrawals/${withdrawalId}`)
+          .set(
+            { status: "failed", failReason: "insufficient_balance" },
+            { merge: true },
+          );
+      } catch (markErr) {
+        console.error(
+          "[M-Pesa B2C] Failed to mark withdrawal as failed:",
+          markErr,
+        );
+      }
+
+      return NextResponse.json(
+        { error: "Amount exceeds your available balance." },
+        { status: 400 },
       );
     }
 
@@ -180,8 +232,8 @@ export async function POST(req: NextRequest) {
       PartyA: B2C_SHORTCODE, // your shortcode
       PartyB: normalizedPhone, // customer phone, e.g. 2547XXXXXXXX
       Remarks: remarks,
-      QueueTimeOutURL: B2C_TIMEOUT_URL,
-      ResultURL: B2C_RESULT_URL,
+      QueueTimeOutURL: appendCallbackSecret(B2C_TIMEOUT_URL),
+      ResultURL: appendCallbackSecret(B2C_RESULT_URL),
       Occasion: "Withdrawal",
     };
 

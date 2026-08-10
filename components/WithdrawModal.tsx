@@ -158,9 +158,13 @@ export default function WithdrawModal({ available, onClose }: WithdrawModalProps
       });
 
       // 2) Call our B2C API, passing userId + withdrawalId
+      const idToken = await user.getIdToken();
       const resp = await fetch('/api/mpesa/b2c', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${idToken}`,
+        },
         body: JSON.stringify({
           amount: amountNumber,
           phoneNumber, // E.164; route will normalize to 2547xxxx
