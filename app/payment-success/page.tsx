@@ -3,6 +3,8 @@
 
 import { Suspense, useEffect, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
+import { auth } from '@/lib/firebase';
+import { onAuthStateChanged } from 'firebase/auth';
 
 function PaymentSuccessInner() {
   const searchParams = useSearchParams();
@@ -16,10 +18,29 @@ function PaymentSuccessInner() {
 
   useEffect(() => {
     if (!bookingId) return;
-    fetch(`/api/get-booking?bookingId=${bookingId}`)
-      .then((res) => res.json())
-      .then((data) => setBookingDetails(data))
-      .catch(() => setBookingDetails(null));
+
+    // 🔐 get-booking now requires auth. This page loads right after an
+    // external redirect (Pesapal/Paystack), so on a cold load
+    // auth.currentUser may not be hydrated yet — wait for the real
+    // auth state instead of reading it immediately.
+    const unsub = onAuthStateChanged(auth, async (user) => {
+      if (!user) {
+        setBookingDetails(null);
+        return;
+      }
+      try {
+        const idToken = await user.getIdToken();
+        const res = await fetch(`/api/get-booking?bookingId=${bookingId}`, {
+          headers: { Authorization: `Bearer ${idToken}` },
+        });
+        const data = await res.json();
+        setBookingDetails(data);
+      } catch {
+        setBookingDetails(null);
+      }
+    });
+
+    return () => unsub();
   }, [bookingId]);
 
   useEffect(() => {
