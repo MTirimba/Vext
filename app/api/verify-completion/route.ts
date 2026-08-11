@@ -1,5 +1,7 @@
+// /workspaces/Vext/app/api/verify-completion/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
+import { requireAuth } from "@/lib/requireAuth";
 import crypto from "crypto";
 
 // Reuse same hashing logic as save-booking
@@ -9,7 +11,14 @@ function hashPin(pin: string) {
 
 export async function POST(req: NextRequest) {
   try {
-    const { bookingId, pin, providerId } = await req.json();
+    // 🔐 Must be signed in — identity comes from the verified token, not the body.
+    // This matters more than it looks: this endpoint is what flips
+    // releaseVerified=true, which is what unlocks a provider's withdrawable
+    // balance (see lib/providerBalance.ts).
+    const auth = await requireAuth(req);
+    if (auth instanceof NextResponse) return auth;
+
+    const { bookingId, pin } = await req.json();
 
     if (!bookingId || !pin) {
       return NextResponse.json(
@@ -27,8 +36,9 @@ export async function POST(req: NextRequest) {
 
     const data = snap.data() as any;
 
-    // Optional guard: ensure only the correct provider can verify
-    if (providerId && data.providerId && data.providerId !== providerId) {
+    // 🔐 Only the provider who owns this booking can verify completion —
+    // this check is now unconditional, it can't be skipped by omitting a field.
+    if (!data.providerId || auth.uid !== data.providerId) {
       return NextResponse.json(
         { error: "You are not allowed to verify this booking" },
         { status: 403 }

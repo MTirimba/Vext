@@ -1,9 +1,15 @@
-// /app/api/get-booking/route.ts
+// /workspaces/Vext/app/api/get-booking/route.ts
 import { NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
+import { requireAuth } from "@/lib/requireAuth";
 
 export async function GET(req: Request) {
   try {
+    // 🔐 Must be signed in — this endpoint returns the completion PIN,
+    // which should only ever go to the client who owns the booking.
+    const auth = await requireAuth(req);
+    if (auth instanceof NextResponse) return auth;
+
     const { searchParams } = new URL(req.url);
     const bookingId = searchParams.get("bookingId");
 
@@ -18,6 +24,14 @@ export async function GET(req: Request) {
     }
 
     const booking = bookingSnap.data() as any;
+
+    // 🔐 Only the client who owns this booking can view it
+    if (!booking.clientId || auth.uid !== booking.clientId) {
+      return NextResponse.json(
+        { error: "You are not allowed to view this booking" },
+        { status: 403 },
+      );
+    }
 
     // Enrich details with provider info
     const providerSnap = await adminDb

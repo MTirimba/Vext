@@ -1,3 +1,4 @@
+// /workspaces/Vext/app/creator/bookings/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -336,13 +337,16 @@ export default function CreatorBookings() {
       setVerifyingId(booking.id);
       setVerifyMessages((prev) => ({ ...prev, [booking.id]: null }));
 
+      const verifyIdToken = await auth.currentUser?.getIdToken();
       const res = await fetch("/api/verify-completion", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(verifyIdToken ? { Authorization: `Bearer ${verifyIdToken}` } : {}),
+        },
         body: JSON.stringify({
           bookingId: booking.id,
           pin,
-          providerId: booking.providerId,
         }),
       });
 
