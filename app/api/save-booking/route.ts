@@ -1,3 +1,4 @@
+// /workspaces/Vext/app/api/save-booking/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
 import { requireAuth } from "@/lib/requireAuth";
@@ -9,12 +10,10 @@ function generateShortId() {
   const digits = "0123456789";
   let result = "";
 
-  // first two: digits
   for (let i = 0; i < 2; i++) {
     result += digits.charAt(Math.floor(Math.random() * digits.length));
   }
 
-  // last two: letters or digits
   const mixed = letters + digits;
   for (let i = 0; i < 2; i++) {
     result += mixed.charAt(Math.floor(Math.random() * mixed.length));
@@ -98,6 +97,8 @@ export async function POST(req: NextRequest) {
       clientPhone,
       clientName,
       clientInstructions, // ⭐ optional special instructions from client
+      serviceLocationType, // 🚗 "onsite" | "housecall"
+      housecallAddress, // 🚗 required if serviceLocationType === "housecall"
     } = body;
 
     const { total, subtotal, markupAmount, markupRate, markupPercent } =
@@ -116,6 +117,30 @@ export async function POST(req: NextRequest) {
         { error: "You can only manage your own bookings" },
         { status: 403 },
       );
+    }
+
+    // 🚗 Normalize/validate mobile-service selection
+    const safeServiceLocationType: "onsite" | "housecall" =
+      serviceLocationType === "housecall" ? "housecall" : "onsite";
+    const safeHousecallAddress =
+      typeof housecallAddress === "string" ? housecallAddress.trim() : "";
+
+    if (safeServiceLocationType === "housecall" && !safeHousecallAddress) {
+      return NextResponse.json(
+        { error: "housecallAddress is required when serviceLocationType is 'housecall'" },
+        { status: 400 },
+      );
+    }
+
+    if (safeServiceLocationType === "housecall") {
+      const videoSnap = await adminDb.collection("videos").doc(videoId).get();
+      const videoData = videoSnap.exists ? (videoSnap.data() as any) : null;
+      if (!videoData?.availableForMobileService) {
+        return NextResponse.json(
+          { error: "This service is not available for housecall/outcall." },
+          { status: 400 },
+        );
+      }
     }
 
     // Get provider details
@@ -221,6 +246,9 @@ export async function POST(req: NextRequest) {
           typeof clientInstructions === "string"
             ? clientInstructions
             : existing.clientInstructions || "",
+        serviceLocationType: safeServiceLocationType,
+        housecallAddress:
+          safeServiceLocationType === "housecall" ? safeHousecallAddress : null,
       });
 
       return NextResponse.json({ bookingId, updated: true }, { status: 200 });
@@ -275,6 +303,9 @@ export async function POST(req: NextRequest) {
       releaseVerified: false, // 🔐 funds not yet released to provider
       clientInstructions:
         typeof clientInstructions === "string" ? clientInstructions : "",
+      serviceLocationType: safeServiceLocationType,
+      housecallAddress:
+        safeServiceLocationType === "housecall" ? safeHousecallAddress : null,
     });
 
     return NextResponse.json(

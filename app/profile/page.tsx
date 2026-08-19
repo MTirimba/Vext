@@ -1,3 +1,4 @@
+// /workspaces/Vext/app/profile/page.tsx
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -91,6 +92,7 @@ export default function ProfilePage() {
 
   // Basic fields
   const [isProvider, setIsProvider] = useState(false);
+  const [offersMobileService, setOffersMobileService] = useState(false);
 
   const [username, setUsername] = useState('');
   const [originalUsername, setOriginalUsername] = useState(''); // to know if it’s first set
@@ -160,6 +162,7 @@ export default function ProfilePage() {
       setGender(d.gender || '');
       setLocation(d.location || '');
       setIsProvider(!!d.isProvider);
+      setOffersMobileService(!!d.offersMobileService);
       setBusinessName(d.businessName || '');
       setServices(d.services || '');
       setBio(d.bio || '');
@@ -276,6 +279,7 @@ export default function ProfilePage() {
         updates.businessName = businessName;
         updates.services = services;
         updates.bio = bio;
+        updates.offersMobileService = offersMobileService;
 
         // Only set businessUsername client-side the first time
         if (!originalBusinessUsername) {
@@ -496,6 +500,22 @@ export default function ProfilePage() {
               Lowercase letters, numbers, underscore and dot only. Shown as @businessname and used at /c/businessname.
             </p>
           </label>
+
+          <label className="flex items-center space-x-2">
+            <input
+              type="checkbox"
+              checked={offersMobileService}
+              onChange={e => setOffersMobileService(e.target.checked)}
+            />
+            <span>
+              I offer mobile / outcall services (I can travel to the client)
+            </span>
+          </label>
+          <p className="text-xs text-gray-500 -mt-2">
+            When enabled, you can mark individual services as available for
+            housecall/outcall while uploading them, and clients will be able
+            to request a housecall when booking those services.
+          </p>
 
           <button
             type="button"

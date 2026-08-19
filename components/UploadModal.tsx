@@ -1,3 +1,4 @@
+// /workspaces/Vext/components/UploadModal.tsx
 'use client';
 
 import { useState, useMemo, useEffect } from 'react';
@@ -117,6 +118,11 @@ export function UploadModal({ onClose }: Props) {
   // provider location (for locationTag)
   const [providerLocationTag, setProviderLocationTag] = useState('');
 
+  // 🚗 mobile/outcall service
+  const [providerOffersMobile, setProviderOffersMobile] = useState(false);
+  const [availableForMobileService, setAvailableForMobileService] =
+    useState(false);
+
   // ------------------ derive category + facets ------------------
 
   const selectedCategory: ServiceCategory | null = useMemo(
@@ -196,6 +202,7 @@ export function UploadModal({ onClose }: Props) {
         if (d.location) parts.push(d.location);
         const tag = parts.join(', ');
         if (tag) setProviderLocationTag(tag);
+        setProviderOffersMobile(!!d.offersMobileService);
       } catch (err) {
         console.error('profile location fetch error', err);
       }
@@ -397,6 +404,11 @@ export function UploadModal({ onClose }: Props) {
         nailShapes: activeFacets.nailShapes ? nailShapeIds : [],
         nailLength: activeFacets.nailLength ? (nailLengthId || null) : null,
         locationTag: providerLocationTag || null,
+
+        // 🚗 mobile/outcall service availability for this specific service.
+        // Only ever true if the provider has also enabled it on their profile.
+        availableForMobileService:
+          providerOffersMobile && availableForMobileService,
 
         // media
         url: media[0]?.url || '',
@@ -685,6 +697,23 @@ export function UploadModal({ onClose }: Props) {
             onChange={(e) => setSpecialInstructions(e.target.value)}
           />
         </label>
+
+        {/* 🚗 Mobile / outcall service availability — only shown if the
+            provider has enabled this on their profile */}
+        {providerOffersMobile && (
+          <label className="flex items-start space-x-2 mb-3 p-2 border rounded bg-gray-50">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={availableForMobileService}
+              onChange={(e) => setAvailableForMobileService(e.target.checked)}
+            />
+            <span className="text-sm">
+              Available for housecall / outcall — clients booking this
+              service can request that you come to them.
+            </span>
+          </label>
+        )}
 
         {/* Discovery facets - only show what makes sense for this category */}
         {selectedCategory && (

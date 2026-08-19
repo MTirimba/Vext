@@ -46,6 +46,7 @@ interface VideoDoc {
   specialInstructions?: string | null;
   serviceIncludes?: string[];
   notProvided?: string[];
+  availableForMobileService?: boolean;
 }
 
 interface BookingModalProps {
@@ -272,6 +273,13 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
 
   // ⭐ client's special instructions for this booking
   const [clientInstructions, setClientInstructions] = useState("");
+
+  // 🚗 mobile/outcall service — only relevant if this specific
+  // service (video) was marked available for it
+  const [serviceLocationType, setServiceLocationType] = useState<
+    "onsite" | "housecall"
+  >("onsite");
+  const [housecallAddress, setHousecallAddress] = useState("");
 
   // 💰 Wallet balance (client-side view)
   const [walletBalance, setWalletBalance] = useState<number | null>(null);
@@ -578,6 +586,15 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
     if (!profileComplete) return alert("Please complete your profile");
     if (!paymentMethod) return alert("Select a payment method");
 
+    if (
+      serviceLocationType === "housecall" &&
+      !housecallAddress.trim()
+    ) {
+      return alert(
+        "Please enter the address where the provider should come for your housecall.",
+      );
+    }
+
     // 💰 Wallet sanity check before we even save booking
     if (paymentMethod === "wallet") {
       if (walletBalance == null) {
@@ -613,6 +630,11 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
         clientPhone: phone || null,
         clientName: name || "",
         clientInstructions: clientInstructions.trim() || undefined,
+        serviceLocationType,
+        housecallAddress:
+          serviceLocationType === "housecall"
+            ? housecallAddress.trim()
+            : null,
       };
 
       const saveIdToken = await auth.currentUser?.getIdToken();
@@ -1144,6 +1166,58 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
                         </div>
                       </div>
 
+                      {/* 🚗 Housecall / outcall option — only shown if this
+                          specific service was marked available for it */}
+                      {video.availableForMobileService && (
+                        <div className="mt-4">
+                          <label className="block text-sm font-medium mb-1">
+                            Where would you like this service?
+                          </label>
+                          <div className="flex gap-4 text-sm">
+                            <label className="flex items-center gap-1">
+                              <input
+                                type="radio"
+                                name="serviceLocationType"
+                                checked={serviceLocationType === "onsite"}
+                                onChange={() =>
+                                  setServiceLocationType("onsite")
+                                }
+                              />
+                              At provider's location
+                            </label>
+                            <label className="flex items-center gap-1">
+                              <input
+                                type="radio"
+                                name="serviceLocationType"
+                                checked={serviceLocationType === "housecall"}
+                                onChange={() =>
+                                  setServiceLocationType("housecall")
+                                }
+                              />
+                              Housecall (provider comes to you)
+                            </label>
+                          </div>
+
+                          {serviceLocationType === "housecall" && (
+                            <div className="mt-2">
+                              <input
+                                type="text"
+                                className="w-full border rounded px-2 py-1 text-sm"
+                                placeholder="Enter the address for the provider to come to"
+                                value={housecallAddress}
+                                onChange={(e) =>
+                                  setHousecallAddress(e.target.value)
+                                }
+                              />
+                              <p className="text-xs text-gray-500 mt-1">
+                                Your provider may charge extra for travel —
+                                confirm with them directly if unsure.
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
                       {/* ⭐ Client special instructions to provider */}
                       <div className="mt-4">
                         <label className="block text-sm font-medium mb-1">
@@ -1181,6 +1255,15 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
                       <p className="mt-2 font-semibold">
                         Total: KSHS {totalWithMarkup}
                       </p>
+
+                      {video.availableForMobileService && (
+                        <p className="mt-2 text-sm">
+                          <span className="font-semibold">Location:</span>{" "}
+                          {serviceLocationType === "housecall"
+                            ? `Housecall — ${housecallAddress}`
+                            : "At provider's location"}
+                        </p>
+                      )}
 
                       {clientInstructions.trim() && (
                         <div className="mt-3 p-2 rounded bg-gray-50 border text-xs text-gray-800 whitespace-pre-wrap">
