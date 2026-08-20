@@ -1,8 +1,9 @@
+// /workspaces/Vext/components/EditVideoModal.tsx
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
 import { db } from '../lib/firebase';
-import { doc, updateDoc } from 'firebase/firestore';
+import { doc, updateDoc, getDoc } from 'firebase/firestore';
 
 import {
   SERVICE_CATEGORIES,
@@ -65,6 +66,30 @@ export function EditVideoModal({
   const [addonName, setAddonName] = useState('');
   const [addonCost, setAddonCost] = useState(0);
   const [addonUnit, setAddonUnit] = useState('');
+  // index of the addon currently being edited, or null when adding a new one
+  const [editingAddonIndex, setEditingAddonIndex] = useState<number | null>(
+    null,
+  );
+
+  // 🚗 mobile/outcall service — only shown if the owning provider has
+  // enabled this on their profile
+  const [providerOffersMobile, setProviderOffersMobile] = useState(false);
+  const [availableForMobileService, setAvailableForMobileService] =
+    useState<boolean>(!!video.availableForMobileService);
+
+  useEffect(() => {
+    if (!video?.userId) return;
+    (async () => {
+      try {
+        const snap = await getDoc(doc(db, 'users', video.userId));
+        if (!snap.exists()) return;
+        const d = snap.data() as any;
+        setProviderOffersMobile(!!d.offersMobileService);
+      } catch (err) {
+        console.error('EditVideoModal: failed to load provider profile', err);
+      }
+    })();
+  }, [video?.userId]);
 
   // booking helpers
   const [specialInstructions, setSpecialInstructions] = useState<string>(
@@ -197,18 +222,54 @@ export function EditVideoModal({
     });
   };
 
-  const handleAddAddon = () => {
+  const handleSaveAddon = () => {
     const trimmedName = addonName.trim();
     const trimmedUnit = addonUnit.trim();
-    if (trimmedName && trimmedUnit && addonCost > 0) {
+    if (!trimmedName || !trimmedUnit || addonCost <= 0) return;
+
+    if (editingAddonIndex !== null) {
+      // Editing an existing addon — replace it in place
+      setAddons((prev) =>
+        prev.map((a, idx) =>
+          idx === editingAddonIndex
+            ? { name: trimmedName, cost: addonCost, unit: trimmedUnit }
+            : a,
+        ),
+      );
+      setEditingAddonIndex(null);
+    } else {
+      // Adding a new addon
       setAddons((prev) => [
         ...prev,
         { name: trimmedName, cost: addonCost, unit: trimmedUnit },
       ]);
-      setAddonName('');
-      setAddonCost(0);
-      setAddonUnit('');
     }
+
+    setAddonName('');
+    setAddonCost(0);
+    setAddonUnit('');
+  };
+
+  const startEditAddon = (idx: number) => {
+    const a = addons[idx];
+    if (!a) return;
+    setAddonName(a.name);
+    setAddonCost(a.cost);
+    setAddonUnit(a.unit);
+    setEditingAddonIndex(idx);
+  };
+
+  const cancelEditAddon = () => {
+    setEditingAddonIndex(null);
+    setAddonName('');
+    setAddonCost(0);
+    setAddonUnit('');
+  };
+
+  const removeAddon = (idx: number) => {
+    setAddons((prev) => prev.filter((_, i) => i !== idx));
+    // if the addon being removed was mid-edit, reset the edit form too
+    if (editingAddonIndex === idx) cancelEditAddon();
   };
 
   const addInclude = () => {
@@ -245,6 +306,8 @@ export function EditVideoModal({
       specialInstructions: specialInstructions.trim() || null,
       serviceIncludes: includes,
       notProvided,
+      // 🚗 Only ever true if the provider still has this enabled on their profile
+      availableForMobileService: providerOffersMobile && availableForMobileService,
     };
 
     if (categoryId && selectedCategory && selectedSubcategory) {
@@ -444,6 +507,23 @@ export function EditVideoModal({
             onChange={(e) => setSpecialInstructions(e.target.value)}
           />
         </label>
+
+        {/* 🚗 Mobile / outcall service availability — only shown if the
+            provider has enabled this on their profile */}
+        {providerOffersMobile && (
+          <label className="flex items-start space-x-2 p-2 border rounded bg-gray-50">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={availableForMobileService}
+              onChange={(e) => setAvailableForMobileService(e.target.checked)}
+            />
+            <span className="text-sm">
+              Available for housecall / outcall — clients booking this
+              service can request that you come to them.
+            </span>
+          </label>
+        )}
 
         {/* Discovery facets */}
         {selectedCategory && (
@@ -686,27 +766,40 @@ export function EditVideoModal({
         <div className="border rounded p-3">
           <div className="flex justify-between items-center mb-2">
             <h3 className="font-semibold text-sm">Add-ons / Extras</h3>
-            <button
-              onClick={handleAddAddon}
-              className="text-blue-600 font-bold text-xl leading-none"
-              type="button"
-            >
-              ➕
-            </button>
           </div>
 
-          {addons.map((a, idx) => (
-            <div
-              key={`addon-${idx}-${a.name}`}
-              className="flex justify-between mb-1 text-sm"
-            >
-              <span className="flex-1">{a.name}</span>
-              <span className="w-20 text-right">
-                {Number(a.cost || 0).toFixed(0)}
-              </span>
-              <span className="ml-1">/ {a.unit}</span>
+          {addons.length > 0 && (
+            <div className="space-y-1 mb-2">
+              {addons.map((a, idx) => (
+                <div
+                  key={`addon-${idx}-${a.name}`}
+                  className={`flex items-center justify-between text-sm p-1.5 rounded ${
+                    editingAddonIndex === idx ? 'bg-blue-50' : ''
+                  }`}
+                >
+                  <span className="flex-1">{a.name}</span>
+                  <span className="w-20 text-right">
+                    {Number(a.cost || 0).toFixed(0)}
+                  </span>
+                  <span className="ml-1 mr-2">/ {a.unit}</span>
+                  <button
+                    type="button"
+                    className="text-xs text-blue-600 ml-1"
+                    onClick={() => startEditAddon(idx)}
+                  >
+                    edit
+                  </button>
+                  <button
+                    type="button"
+                    className="text-xs text-red-600 ml-2"
+                    onClick={() => removeAddon(idx)}
+                  >
+                    remove
+                  </button>
+                </div>
+              ))}
             </div>
-          ))}
+          )}
 
           <div className="flex space-x-2 mt-2">
             <input
@@ -730,6 +823,24 @@ export function EditVideoModal({
               value={addonUnit}
               onChange={(e) => setAddonUnit(e.target.value)}
             />
+          </div>
+          <div className="flex space-x-2 mt-2">
+            <button
+              type="button"
+              onClick={handleSaveAddon}
+              className="flex-1 px-3 py-1 rounded bg-blue-600 text-white text-sm"
+            >
+              {editingAddonIndex !== null ? 'Save addon' : 'Add addon'}
+            </button>
+            {editingAddonIndex !== null && (
+              <button
+                type="button"
+                onClick={cancelEditAddon}
+                className="px-3 py-1 rounded bg-gray-200 text-black text-sm"
+              >
+                Cancel
+              </button>
+            )}
           </div>
         </div>
 
