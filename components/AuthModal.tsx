@@ -7,6 +7,7 @@ import {
   signInWithPopup,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
+  fetchSignInMethodsForEmail,
   RecaptchaVerifier,
   signInWithPhoneNumber,
   PhoneAuthProvider,
@@ -88,11 +89,17 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [isSignUp, setIsSignUp] = useState(false);
+  // 🔐 Requires an explicit second confirmation before a brand new account
+  // is ever created, so it can never happen without the person clearly
+  // seeing and agreeing to it first.
+  const [pendingNewAccountConfirm, setPendingNewAccountConfirm] =
+    useState(false);
   const toggleMode = () => {
     setIsSignUp((v) => !v);
     setConfirmPassword('');
     setError(null);
     setSuccess(null);
+    setPendingNewAccountConfirm(false);
   };
 
   // Phone OTP state (only used when identifier looks like a phone)
@@ -138,6 +145,7 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
     setLinkingInfo(null);
     setError(null);
     setSuccess(null);
+    setPendingNewAccountConfirm(false);
   }, [identifier]);
 
   /* ---------- Google Sign-in ---------- */
@@ -193,14 +201,44 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
 
       setLoading(true);
 
+      // 🔐 Pre-check via fetchSignInMethodsForEmail — used only to decide
+      // whether to show the "you're about to create a new account"
+      // confirmation on Sign Up. NOTE: if this Firebase project has Email
+      // Enumeration Protection enabled, this call always returns an empty
+      // array regardless of whether the account exists — so it is
+      // deliberately NOT used to block Sign In. A real Sign In attempt
+      // below is always the source of truth for whether the account
+      // exists, exactly as before.
+      let emailIsRegistered = false;
+      try {
+        const existingMethods = await fetchSignInMethodsForEmail(auth, email);
+        emailIsRegistered = existingMethods.length > 0;
+      } catch (preCheckErr) {
+        console.warn('[AUTH_MODAL] fetchSignInMethodsForEmail failed, continuing:', preCheckErr);
+      }
+
+      if (isSignUp && !emailIsRegistered && !pendingNewAccountConfirm) {
+        // First click on Sign Up — require an explicit second click before
+        // actually creating anything. (If enumeration protection makes
+        // emailIsRegistered a false negative, worst case is one extra
+        // confirmation click; createUserWithEmailAndPassword below still
+        // correctly rejects truly-taken emails with auth/email-already-in-use.)
+        setLoading(false);
+        setPendingNewAccountConfirm(true);
+        setError(null);
+        return;
+      }
+
       const cred = isSignUp
         ? await createUserWithEmailAndPassword(auth, email, password)
         : await signInWithEmailAndPassword(auth, email, password);
 
+      setPendingNewAccountConfirm(false);
       await createUserProfile(cred.user);
       onClose();
     } catch (err: any) {
       console.error('[AUTH_MODAL] email auth error:', err);
+      setPendingNewAccountConfirm(false);
       if (err?.code === 'auth/email-already-in-use') {
         setError(
           'An account with this email already exists. Please sign in instead.'
@@ -208,7 +246,10 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
         setIsSignUp(false);
       } else if (err?.code === 'auth/wrong-password') {
         setError('Incorrect password. Please try again.');
-      } else if (err?.code === 'auth/user-not-found') {
+      } else if (
+        err?.code === 'auth/user-not-found' ||
+        err?.code === 'auth/invalid-credential'
+      ) {
         setError('No account found with this email. Try signing up instead.');
       } else {
         setError(err.message || 'Authentication failed.');
@@ -393,6 +434,18 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
           />
         </div>
 
+        {/* 🔎 Unambiguous mode heading — always visible regardless of how
+            the person landed on this screen, so it's never unclear
+            whether submitting will sign them in or create a new account. */}
+        <h2 className="text-lg font-semibold mb-1">
+          {isSignUp ? 'Create a new account' : 'Sign in to your account'}
+        </h2>
+        {isSignUp && (
+          <p className="text-xs text-gray-500 mb-4">
+            This will create a brand new VextUp account.
+          </p>
+        )}
+
         {/* Google */}
         <button
           onClick={handleGoogle}
@@ -437,6 +490,15 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
           {/* -------- EMAIL MODE -------- */}
           {isEmailLike && (
             <>
+              {pendingNewAccountConfirm && (
+                <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5 text-left">
+                  No account exists yet for <b>{identifier.trim()}</b>.
+                  Clicking below will create a brand new VextUp account with
+                  this email. If you meant to sign in to an existing
+                  account, double-check the email first.
+                </div>
+              )}
+
               <button
                 onClick={handleEmailSubmit}
                 disabled={loading}
@@ -447,7 +509,9 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
                     ? 'Creating account…'
                     : 'Signing in…'
                   : isSignUp
-                  ? 'Create Account'
+                  ? pendingNewAccountConfirm
+                    ? 'Confirm: Create New Account'
+                    : 'Create Account'
                   : 'Sign In'}
               </button>
 
