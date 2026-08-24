@@ -120,6 +120,10 @@ export function UploadModal({ onClose }: Props) {
 
   // 🚗 mobile/outcall service
   const [providerOffersMobile, setProviderOffersMobile] = useState(false);
+  // 🎭 If the uploading account is flagged as a demo/sales account, every
+  // piece of content it uploads inherits that flag automatically — so a
+  // demo account only ever needs to be flagged once, never per-upload.
+  const [providerIsDemo, setProviderIsDemo] = useState(false);
   const [availableForMobileService, setAvailableForMobileService] =
     useState(false);
 
@@ -203,6 +207,7 @@ export function UploadModal({ onClose }: Props) {
         const tag = parts.join(', ');
         if (tag) setProviderLocationTag(tag);
         setProviderOffersMobile(!!d.offersMobileService);
+        setProviderIsDemo(!!d.isDemo);
       } catch (err) {
         console.error('profile location fetch error', err);
       }
@@ -409,6 +414,9 @@ export function UploadModal({ onClose }: Props) {
         // Only ever true if the provider has also enabled it on their profile.
         availableForMobileService:
           providerOffersMobile && availableForMobileService,
+
+        // 🎭 Inherited from the uploading account — see providerIsDemo above
+        isDemo: providerIsDemo,
 
         // media
         url: media[0]?.url || '',

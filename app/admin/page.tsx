@@ -16,6 +16,7 @@ import {
   doc,
   getDoc,
   setDoc,
+  updateDoc,
 } from 'firebase/firestore';
 
 import {
@@ -463,6 +464,29 @@ export default function AdminPage() {
   );
   const providerEarnings = Math.max(0, kpi.gmv - appRevenue);
 
+  // 🎭 Mark/unmark an account as a demo/sales-demo account. When true, this
+  // account and anything it uploads is hidden from the real feed and search
+  // (see components/VideoFeed.tsx and app/search/page.tsx). Relies on the
+  // same admin-claim gate (useAdminGate) as the rest of this page.
+  const [demoTogglingId, setDemoTogglingId] = useState<string | null>(null);
+  const handleToggleDemo = async (userId: string, nextValue: boolean) => {
+    setDemoTogglingId(userId);
+    try {
+      await updateDoc(doc(db, 'users', userId), { isDemo: nextValue });
+      setUsers((prev) =>
+        prev.map((u) => (u.id === userId ? { ...u, isDemo: nextValue } : u)),
+      );
+      setCreators((prev) =>
+        prev.map((u) => (u.id === userId ? { ...u, isDemo: nextValue } : u)),
+      );
+    } catch (err) {
+      console.error('Failed to toggle isDemo:', err);
+      alert('Failed to update demo status. Please try again.');
+    } finally {
+      setDemoTogglingId(null);
+    }
+  };
+
   const handleSaveMarkup = async () => {
     try {
       setMarkupSaving(true);
@@ -595,6 +619,7 @@ export default function AdminPage() {
                   <th className="py-2 pr-4">Provider?</th>
                   <th className="py-2 pr-4">Joined</th>
                   <th className="py-2 pr-4">Sign up via</th>
+                  <th className="py-2 pr-4">Demo?</th>
                 </tr>
               </thead>
               <tbody>
@@ -624,6 +649,24 @@ export default function AdminPage() {
                     <td className="py-2 pr-4">
                       {inferSignupMethod(u)}
                     </td>
+                    <td className="py-2 pr-4">
+                      <button
+                        type="button"
+                        disabled={demoTogglingId === u.id}
+                        onClick={() => handleToggleDemo(u.id, !u.isDemo)}
+                        className={`text-xs px-2 py-1 rounded ${
+                          u.isDemo
+                            ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                            : 'bg-gray-100 text-gray-600 border border-gray-300'
+                        }`}
+                      >
+                        {demoTogglingId === u.id
+                          ? '...'
+                          : u.isDemo
+                          ? '🎭 Demo — unmark'
+                          : 'Mark as demo'}
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -645,6 +688,7 @@ export default function AdminPage() {
                   <th className="py-2 pr-4">Town/County</th>
                   <th className="py-2 pr-4">Joined</th>
                   <th className="py-2 pr-4">Sign up via</th>
+                  <th className="py-2 pr-4">Demo?</th>
                 </tr>
               </thead>
               <tbody>
@@ -668,6 +712,24 @@ export default function AdminPage() {
                     </td>
                     <td className="py-2 pr-4">
                       {inferSignupMethod(u)}
+                    </td>
+                    <td className="py-2 pr-4">
+                      <button
+                        type="button"
+                        disabled={demoTogglingId === u.id}
+                        onClick={() => handleToggleDemo(u.id, !u.isDemo)}
+                        className={`text-xs px-2 py-1 rounded ${
+                          u.isDemo
+                            ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                            : 'bg-gray-100 text-gray-600 border border-gray-300'
+                        }`}
+                      >
+                        {demoTogglingId === u.id
+                          ? '...'
+                          : u.isDemo
+                          ? '🎭 Demo — unmark'
+                          : 'Mark as demo'}
+                      </button>
                     </td>
                   </tr>
                 ))}

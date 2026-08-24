@@ -412,10 +412,13 @@ export default function VideoFeed() {
         const snap = await getDocs(
           query(collection(db, "videos"), orderBy("createdAt", "desc")),
         );
-        const docs = snap.docs.map((d) => ({
-          ...(d.data() as VideoDoc),
-          id: d.id,
-        }));
+        const docs = snap.docs
+          .map((d) => ({
+            ...(d.data() as VideoDoc),
+            id: d.id,
+          }))
+          // 🎭 Never surface demo/sales-demo content in the real feed
+          .filter((v: any) => !v.isDemo);
 
         setAllVideos(docs);
 

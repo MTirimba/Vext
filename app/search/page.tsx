@@ -1,3 +1,4 @@
+// /workspaces/Vext/app/search/page.tsx
 'use client';
 
 import React, { useEffect, useMemo, useState, FormEvent } from 'react';
@@ -362,6 +363,11 @@ function SearchInner() {
 
         snap.forEach((docSnap) => {
           const d = docSnap.data() as any;
+
+          // 🎭 Never surface demo/sales-demo accounts in search or the
+          // people/providers directory
+          if (d.isDemo) return;
+
           const base: UserProfile = {
             id: docSnap.id,
             username: d.username || '',
