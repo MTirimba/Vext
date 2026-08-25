@@ -56,6 +56,10 @@ export default function WithdrawModal({ available, onClose }: WithdrawModalProps
   const [pinVerified, setPinVerified] = useState<boolean>(false);
   const [pinError, setPinError] = useState<string | null>(null);
 
+  // 🎭 Demo/sales-demo accounts use a simulated withdrawal — same UI, same
+  // real balance math, but no actual Safaricom call is ever made.
+  const [isDemoAccount, setIsDemoAccount] = useState(false);
+
   // Prefill phone from user's payout settings & load withdrawal PIN if present
   useEffect(() => {
     if (!user) return;
@@ -82,6 +86,8 @@ export default function WithdrawModal({ available, onClose }: WithdrawModalProps
             console.log('[WITHDRAW_MODAL] No withdrawPin set on profile');
             setStoredWithdrawPin(null);
           }
+
+          setIsDemoAccount(!!d.isDemo);
         } else {
           console.warn('[WITHDRAW_MODAL] No user document found for', user.uid);
         }
@@ -157,9 +163,13 @@ export default function WithdrawModal({ available, onClose }: WithdrawModalProps
         id: withdrawalDocRef.id,
       });
 
-      // 2) Call our B2C API, passing userId + withdrawalId
+      // 2) Call our B2C API (or the demo simulator, for demo accounts),
+      // passing userId + withdrawalId
       const idToken = await user.getIdToken();
-      const resp = await fetch('/api/mpesa/b2c', {
+      const endpoint = isDemoAccount
+        ? '/api/demo/simulate-withdrawal'
+        : '/api/mpesa/b2c';
+      const resp = await fetch(endpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -192,18 +202,9 @@ export default function WithdrawModal({ available, onClose }: WithdrawModalProps
       if (!resp.ok) {
         console.error('[WITHDRAW_MODAL] B2C error full response:', data);
 
-        // mark this withdrawal as failed on init error
-        try {
-          await updateDoc(withdrawalDocRef, {
-            status: 'failed',
-            mpesaInitError: data || null,
-          });
-        } catch (updateErr) {
-          console.error(
-            '[WITHDRAW_MODAL] Failed to mark withdrawal as failed:',
-            updateErr,
-          );
-        }
+        // Note: the /api/mpesa/b2c route now marks this withdrawal as
+        // 'failed' server-side on every error path itself, so no
+        // client-side write is needed (or permitted) here anymore.
 
         setError(
           (data && data.error) ||
@@ -213,9 +214,11 @@ export default function WithdrawModal({ available, onClose }: WithdrawModalProps
         return;
       }
 
-      // all good on init, actual success/failure will come via B2C callback
+      // all good on init
       setSuccess(
-        'Withdrawal request sent. You will receive an M-Pesa SMS once it is processed.',
+        isDemoAccount
+          ? 'Demo withdrawal completed instantly (simulated — no real M-Pesa transaction).'
+          : 'Withdrawal request sent. You will receive an M-Pesa SMS once it is processed.',
       );
       setSubmitting(false);
 
@@ -294,7 +297,14 @@ export default function WithdrawModal({ available, onClose }: WithdrawModalProps
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
       <div className="bg-white rounded-lg p-6 max-w-md w-full shadow-xl">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold">Withdraw Funds</h2>
+          <h2 className="text-lg font-semibold flex items-center gap-2">
+            Withdraw Funds
+            {isDemoAccount && (
+              <span className="text-xs font-normal px-2 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300">
+                🎭 Demo — simulated, no real money moves
+              </span>
+            )}
+          </h2>
           <button
             type="button"
             onClick={onClose}

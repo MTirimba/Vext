@@ -17,6 +17,7 @@ import {
   getDoc,
   setDoc,
   updateDoc,
+  addDoc,
 } from 'firebase/firestore';
 
 import {
@@ -487,6 +488,43 @@ export default function AdminPage() {
     }
   };
 
+  // 💰 Fund a demo account's wallet directly — for setting up the live
+  // wallet-payment part of a sales demo without editing Firestore by hand.
+  // Guarded twice: the button only renders for isDemo-flagged rows, and the
+  // handler itself refuses to run against any account not flagged isDemo,
+  // so this can never be used to credit a real user's wallet by mistake.
+  const [demoFundAmounts, setDemoFundAmounts] = useState<Record<string, string>>({});
+  const [demoFundingId, setDemoFundingId] = useState<string | null>(null);
+  const handleFundDemoWallet = async (targetUser: any) => {
+    if (!targetUser?.isDemo) {
+      alert('This account is not flagged as a demo account.');
+      return;
+    }
+    const raw = demoFundAmounts[targetUser.id];
+    const amount = Number(raw);
+    if (!amount || amount <= 0) {
+      alert('Enter a valid amount to fund.');
+      return;
+    }
+    setDemoFundingId(targetUser.id);
+    try {
+      await addDoc(collection(db, 'users', targetUser.id, 'walletTransactions'), {
+        amount,
+        type: 'credit',
+        status: 'completed',
+        reason: 'demo_topup',
+        createdAt: Date.now(),
+      });
+      setDemoFundAmounts((prev) => ({ ...prev, [targetUser.id]: '' }));
+      alert(`Funded KES ${amount} into ${targetUser.username || targetUser.id}'s demo wallet.`);
+    } catch (err) {
+      console.error('Failed to fund demo wallet:', err);
+      alert('Failed to fund demo wallet. Please try again.');
+    } finally {
+      setDemoFundingId(null);
+    }
+  };
+
   const handleSaveMarkup = async () => {
     try {
       setMarkupSaving(true);
@@ -666,6 +704,31 @@ export default function AdminPage() {
                           ? '🎭 Demo — unmark'
                           : 'Mark as demo'}
                       </button>
+
+                      {u.isDemo && (
+                        <div className="flex items-center gap-1 mt-1">
+                          <input
+                            type="number"
+                            placeholder="KES"
+                            className="w-16 text-xs border rounded px-1 py-0.5"
+                            value={demoFundAmounts[u.id] || ''}
+                            onChange={(e) =>
+                              setDemoFundAmounts((prev) => ({
+                                ...prev,
+                                [u.id]: e.target.value,
+                              }))
+                            }
+                          />
+                          <button
+                            type="button"
+                            disabled={demoFundingId === u.id}
+                            onClick={() => handleFundDemoWallet(u)}
+                            className="text-xs px-2 py-0.5 rounded bg-green-100 text-green-800 border border-green-300"
+                          >
+                            {demoFundingId === u.id ? '...' : 'Fund wallet'}
+                          </button>
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -730,6 +793,31 @@ export default function AdminPage() {
                           ? '🎭 Demo — unmark'
                           : 'Mark as demo'}
                       </button>
+
+                      {u.isDemo && (
+                        <div className="flex items-center gap-1 mt-1">
+                          <input
+                            type="number"
+                            placeholder="KES"
+                            className="w-16 text-xs border rounded px-1 py-0.5"
+                            value={demoFundAmounts[u.id] || ''}
+                            onChange={(e) =>
+                              setDemoFundAmounts((prev) => ({
+                                ...prev,
+                                [u.id]: e.target.value,
+                              }))
+                            }
+                          />
+                          <button
+                            type="button"
+                            disabled={demoFundingId === u.id}
+                            onClick={() => handleFundDemoWallet(u)}
+                            className="text-xs px-2 py-0.5 rounded bg-green-100 text-green-800 border border-green-300"
+                          >
+                            {demoFundingId === u.id ? '...' : 'Fund wallet'}
+                          </button>
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))}
