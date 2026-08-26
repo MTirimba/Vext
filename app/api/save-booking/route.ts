@@ -99,6 +99,7 @@ export async function POST(req: NextRequest) {
       clientInstructions, // ⭐ optional special instructions from client
       serviceLocationType, // 🚗 "onsite" | "housecall"
       housecallAddress, // 🚗 required if serviceLocationType === "housecall"
+      housecallGeo, // 🚗 optional structured { lat, lng, street, town, county, landmark, building, floor, room }
     } = body;
 
     const { total, subtotal, markupAmount, markupRate, markupPercent } =
@@ -132,10 +133,49 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Basic sanity check on the structured geo payload, if provided
+    const safeHousecallGeo =
+      safeServiceLocationType === "housecall" &&
+      housecallGeo &&
+      typeof housecallGeo === "object"
+        ? {
+            lat: typeof housecallGeo.lat === "number" ? housecallGeo.lat : null,
+            lng: typeof housecallGeo.lng === "number" ? housecallGeo.lng : null,
+            street: String(housecallGeo.street || ""),
+            town: String(housecallGeo.town || ""),
+            county: String(housecallGeo.county || ""),
+            landmark: String(housecallGeo.landmark || ""),
+            building: String(housecallGeo.building || ""),
+            floor: String(housecallGeo.floor || ""),
+            room: String(housecallGeo.room || ""),
+          }
+        : null;
+
     if (safeServiceLocationType === "housecall") {
-      const videoSnap = await adminDb.collection("videos").doc(videoId).get();
-      const videoData = videoSnap.exists ? (videoSnap.data() as any) : null;
-      if (!videoData?.availableForMobileService) {
+      // "Services offered" (the simple provider price-list, distinct from
+      // uploaded videos) use synthetic ids like `svc_<id>` since they don't
+      // have a real doc in the `videos` collection — look them up on the
+      // provider's user doc instead.
+      let offersMobile = false;
+      if (typeof videoId === "string" && videoId.startsWith("svc_")) {
+        const svcId = videoId.slice("svc_".length);
+        const providerSnapForSvc = await adminDb
+          .collection("users")
+          .doc(providerId)
+          .get();
+        const offered: any[] =
+          (providerSnapForSvc.exists &&
+            (providerSnapForSvc.data() as any)?.servicesOffered) ||
+          [];
+        const svc = offered.find((s) => s?.id === svcId);
+        offersMobile = !!svc?.availableForMobileService;
+      } else {
+        const videoSnap = await adminDb.collection("videos").doc(videoId).get();
+        const videoData = videoSnap.exists ? (videoSnap.data() as any) : null;
+        offersMobile = !!videoData?.availableForMobileService;
+      }
+
+      if (!offersMobile) {
         return NextResponse.json(
           { error: "This service is not available for housecall/outcall." },
           { status: 400 },
@@ -249,6 +289,7 @@ export async function POST(req: NextRequest) {
         serviceLocationType: safeServiceLocationType,
         housecallAddress:
           safeServiceLocationType === "housecall" ? safeHousecallAddress : null,
+        housecallGeo: safeHousecallGeo,
       });
 
       return NextResponse.json({ bookingId, updated: true }, { status: 200 });
@@ -306,6 +347,7 @@ export async function POST(req: NextRequest) {
       serviceLocationType: safeServiceLocationType,
       housecallAddress:
         safeServiceLocationType === "housecall" ? safeHousecallAddress : null,
+      housecallGeo: safeHousecallGeo,
     });
 
     return NextResponse.json(

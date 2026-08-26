@@ -49,6 +49,7 @@ interface OfferedService {
   basePrice: number;
   durationMinutes: number; // required
   active?: boolean;
+  availableForMobileService?: boolean; // 🚗 clients can request a housecall for this service
 }
 
 interface UserProfile {
@@ -64,6 +65,8 @@ interface UserProfile {
   servicesProvided?: string;
   location?: string;
   operatingHours?: string;
+  offersMobileService?: boolean; // 🚗 provider-level: can travel to clients at all
+  businessLocationType?: 'shop' | 'mobile_only' | 'both'; // 🚗 shop vs mobile-only vs hybrid
   // granular location fields
   street?: string;
   building?: string;
@@ -174,6 +177,7 @@ export default function BusinessHandlePage() {
   const [serviceNameInput, setServiceNameInput] = useState('');
   const [servicePriceInput, setServicePriceInput] = useState<number | ''>('');
   const [serviceHoursInput, setServiceHoursInput] = useState<number | ''>('');
+  const [serviceMobileInput, setServiceMobileInput] = useState(false);
   const [serviceMinutesInput, setServiceMinutesInput] = useState<number | ''>(
     '',
   );
@@ -411,6 +415,7 @@ export default function BusinessHandlePage() {
     setServicePriceInput('');
     setServiceHoursInput('');
     setServiceMinutesInput('');
+    setServiceMobileInput(false);
     setServiceModalOpen(true);
   };
 
@@ -421,6 +426,7 @@ export default function BusinessHandlePage() {
     const mins = svc.durationMinutes || 0;
     setServiceHoursInput(mins ? Math.floor(mins / 60) : '');
     setServiceMinutesInput(mins ? mins % 60 : '');
+    setServiceMobileInput(!!svc.availableForMobileService);
     setServiceModalOpen(true);
   };
 
@@ -472,6 +478,11 @@ export default function BusinessHandlePage() {
       basePrice: price,
       durationMinutes: totalMinutes,
       active: true,
+      // A mobile-only provider (no shop) has every service mobile by
+      // default; a hybrid provider (shop + mobile) opts in per service.
+      availableForMobileService:
+        profile?.businessLocationType === 'mobile_only' ||
+        (!!profile?.offersMobileService && serviceMobileInput),
     };
 
     const nextServices = editingService
@@ -684,24 +695,38 @@ export default function BusinessHandlePage() {
                 </button>
               </div>
 
-              {/* Full location + map link */}
-              {(fullAddress || mapsHref) && (
+              {/* Full location + map link — a mobile-only provider has no
+                  shop to show, so replace the address with a plain notice
+                  instead of exposing their (often personal) pinned area. */}
+              {profile.businessLocationType === 'mobile_only' ? (
                 <div className="mt-3 text-sm text-gray-800 flex items-start gap-2">
                   <FiMapPin className="mt-0.5 shrink-0 text-gray-600" />
-                  <div>
-                    {fullAddress && <div>{fullAddress}</div>}
-                    {mapsHref && (
-                      <a
-                        href={mapsHref}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-blue-600 hover:underline text-sm"
-                      >
-                        View on map
-                      </a>
-                    )}
-                  </div>
+                  <div>Mobile service — comes to your location</div>
                 </div>
+              ) : (
+                (fullAddress || mapsHref) && (
+                  <div className="mt-3 text-sm text-gray-800 flex items-start gap-2">
+                    <FiMapPin className="mt-0.5 shrink-0 text-gray-600" />
+                    <div>
+                      {fullAddress && <div>{fullAddress}</div>}
+                      {mapsHref && (
+                        <a
+                          href={mapsHref}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-blue-600 hover:underline text-sm"
+                        >
+                          View on map
+                        </a>
+                      )}
+                      {profile.businessLocationType === 'both' && (
+                        <div className="text-xs text-gray-500 mt-0.5">
+                          Also offers mobile / outcall services
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )
               )}
 
               {profile.operatingHours && (
@@ -846,6 +871,8 @@ export default function BusinessHandlePage() {
                   minutes: bookingService.durationMinutes % 60,
                 },
                 userId: resolvedUid,
+                availableForMobileService:
+                  bookingService.availableForMobileService,
               } as any
             }
             onClose={() => setBookingService(null)}
@@ -1040,6 +1067,33 @@ export default function BusinessHandlePage() {
                 which times to block out.
               </p>
             </div>
+
+            {profile?.businessLocationType === 'mobile_only' ? (
+              <div className="text-sm mb-4 p-2 border rounded bg-gray-50 text-gray-600">
+                You don&apos;t have a shop location set, so this service is
+                mobile by default — clients will always book you as a
+                housecall.
+              </div>
+            ) : (
+              profile?.offersMobileService && (
+                <label className="flex items-start gap-2 text-sm mb-4">
+                  <input
+                    type="checkbox"
+                    className="mt-1"
+                    checked={serviceMobileInput}
+                    onChange={(e) => setServiceMobileInput(e.target.checked)}
+                  />
+                  <span>
+                    Available as a housecall / outcall service
+                    <span className="block text-[11px] text-gray-500">
+                      Clients booking this specific service will be able to
+                      request that you come to them instead of visiting your
+                      location.
+                    </span>
+                  </span>
+                </label>
+              )
+            )}
 
             <div className="flex justify-end gap-2 text-sm">
               <button

@@ -22,6 +22,12 @@ import {
 import { onAuthStateChanged } from "firebase/auth";
 import { useRouter } from "next/navigation";
 import AuthModal from "./AuthModal";
+import HousecallAddressPicker, {
+  EMPTY_HOUSECALL_ADDRESS,
+  formatHousecallAddress,
+  isHousecallAddressComplete,
+  type HousecallAddress,
+} from "./HousecallAddressPicker";
 
 async function serverLog(data: any) {
   try {
@@ -279,7 +285,12 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
   const [serviceLocationType, setServiceLocationType] = useState<
     "onsite" | "housecall"
   >("onsite");
-  const [housecallAddress, setHousecallAddress] = useState("");
+  const [housecallDetails, setHousecallDetails] = useState<HousecallAddress>(
+    EMPTY_HOUSECALL_ADDRESS,
+  );
+  // 🚗 true if the provider has no shop at all — every booking with them is
+  // a housecall, so we skip the onsite/housecall choice entirely
+  const [providerIsMobileOnly, setProviderIsMobileOnly] = useState(false);
 
   // 💰 Wallet balance (client-side view)
   const [walletBalance, setWalletBalance] = useState<number | null>(null);
@@ -389,6 +400,9 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
         const ps = await getDoc(doc(db, "users", video.userId));
         const prof = ps.exists() ? (ps.data() as any) : null;
         setProviderSchedule(normalizeScheduleFromProfile(prof));
+        const mobileOnly = prof?.businessLocationType === "mobile_only";
+        setProviderIsMobileOnly(mobileOnly);
+        if (mobileOnly) setServiceLocationType("housecall");
       } catch {
         setProviderSchedule(normalizeScheduleFromProfile(null));
       }
@@ -588,10 +602,10 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
 
     if (
       serviceLocationType === "housecall" &&
-      !housecallAddress.trim()
+      !isHousecallAddressComplete(housecallDetails)
     ) {
       return alert(
-        "Please enter the address where the provider should come for your housecall.",
+        "Please drop a pin for your housecall location (and fill in the building/room details if you have them).",
       );
     }
 
@@ -633,8 +647,10 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
         serviceLocationType,
         housecallAddress:
           serviceLocationType === "housecall"
-            ? housecallAddress.trim()
+            ? formatHousecallAddress(housecallDetails)
             : null,
+        housecallGeo:
+          serviceLocationType === "housecall" ? housecallDetails : null,
       };
 
       const saveIdToken = await auth.currentUser?.getIdToken();
@@ -1170,46 +1186,57 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
                           specific service was marked available for it */}
                       {video.availableForMobileService && (
                         <div className="mt-4">
-                          <label className="block text-sm font-medium mb-1">
-                            Where would you like this service?
-                          </label>
-                          <div className="flex gap-4 text-sm">
-                            <label className="flex items-center gap-1">
-                              <input
-                                type="radio"
-                                name="serviceLocationType"
-                                checked={serviceLocationType === "onsite"}
-                                onChange={() =>
-                                  setServiceLocationType("onsite")
-                                }
-                              />
-                              At provider's location
-                            </label>
-                            <label className="flex items-center gap-1">
-                              <input
-                                type="radio"
-                                name="serviceLocationType"
-                                checked={serviceLocationType === "housecall"}
-                                onChange={() =>
-                                  setServiceLocationType("housecall")
-                                }
-                              />
-                              Housecall (provider comes to you)
-                            </label>
-                          </div>
+                          {providerIsMobileOnly ? (
+                            <>
+                              <label className="block text-sm font-medium mb-1">
+                                Where should the provider come to?
+                              </label>
+                              <p className="text-xs text-gray-500 mb-2">
+                                This provider doesn&apos;t have a shop — they
+                                travel to you for every booking.
+                              </p>
+                            </>
+                          ) : (
+                            <>
+                              <label className="block text-sm font-medium mb-1">
+                                Where would you like this service?
+                              </label>
+                              <div className="flex gap-4 text-sm">
+                                <label className="flex items-center gap-1">
+                                  <input
+                                    type="radio"
+                                    name="serviceLocationType"
+                                    checked={serviceLocationType === "onsite"}
+                                    onChange={() =>
+                                      setServiceLocationType("onsite")
+                                    }
+                                  />
+                                  At provider's location
+                                </label>
+                                <label className="flex items-center gap-1">
+                                  <input
+                                    type="radio"
+                                    name="serviceLocationType"
+                                    checked={
+                                      serviceLocationType === "housecall"
+                                    }
+                                    onChange={() =>
+                                      setServiceLocationType("housecall")
+                                    }
+                                  />
+                                  Housecall (provider comes to you)
+                                </label>
+                              </div>
+                            </>
+                          )}
 
                           {serviceLocationType === "housecall" && (
                             <div className="mt-2">
-                              <input
-                                type="text"
-                                className="w-full border rounded px-2 py-1 text-sm"
-                                placeholder="Enter the address for the provider to come to"
-                                value={housecallAddress}
-                                onChange={(e) =>
-                                  setHousecallAddress(e.target.value)
-                                }
+                              <HousecallAddressPicker
+                                value={housecallDetails}
+                                onChange={setHousecallDetails}
                               />
-                              <p className="text-xs text-gray-500 mt-1">
+                              <p className="text-xs text-gray-500 mt-2">
                                 Your provider may charge extra for travel —
                                 confirm with them directly if unsure.
                               </p>
@@ -1260,7 +1287,7 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
                         <p className="mt-2 text-sm">
                           <span className="font-semibold">Location:</span>{" "}
                           {serviceLocationType === "housecall"
-                            ? `Housecall — ${housecallAddress}`
+                            ? `Housecall — ${formatHousecallAddress(housecallDetails)}`
                             : "At provider's location"}
                         </p>
                       )}

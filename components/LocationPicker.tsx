@@ -7,12 +7,15 @@ type AddressInfo = {
   street?: string;
   town?: string;
   county?: string;
+  landmark?: string;
 };
 
 interface LocationPickerProps {
   initialLatLng?: { lat: number; lng: number };
   onLocationSelect: (lat: number, lng: number, address: AddressInfo) => void;
 }
+
+export type { AddressInfo };
 
 export default function LocationPicker({
   initialLatLng,
@@ -61,10 +64,31 @@ export default function LocationPicker({
           }
         });
 
+        // Best-effort nearby landmark: Google returns several results for the
+        // same point, ordered most-specific first. A named point of interest
+        // or establishment (e.g. a mall, school, church) makes a better
+        // landmark than the raw street address, so look for one there.
+        let landmark = '';
+        for (const r of results) {
+          const rTypes: string[] = r.types || [];
+          if (
+            rTypes.includes('point_of_interest') ||
+            rTypes.includes('establishment') ||
+            rTypes.includes('premise')
+          ) {
+            const name = (r.address_components || [])[0]?.long_name;
+            if (name) {
+              landmark = name;
+              break;
+            }
+          }
+        }
+
         onLocationSelect(lat, lng, {
           street,
           town,
           county,
+          landmark,
         });
       } else {
         // Fallback: no address details
