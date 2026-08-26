@@ -120,6 +120,7 @@ export function UploadModal({ onClose }: Props) {
 
   // 🚗 mobile/outcall service
   const [providerOffersMobile, setProviderOffersMobile] = useState(false);
+  const [providerIsMobileOnly, setProviderIsMobileOnly] = useState(false);
   // 🎭 If the uploading account is flagged as a demo/sales account, every
   // piece of content it uploads inherits that flag automatically — so a
   // demo account only ever needs to be flagged once, never per-upload.
@@ -207,6 +208,7 @@ export function UploadModal({ onClose }: Props) {
         const tag = parts.join(', ');
         if (tag) setProviderLocationTag(tag);
         setProviderOffersMobile(!!d.offersMobileService);
+        setProviderIsMobileOnly(d.businessLocationType === 'mobile_only');
         setProviderIsDemo(!!d.isDemo);
       } catch (err) {
         console.error('profile location fetch error', err);
@@ -411,9 +413,11 @@ export function UploadModal({ onClose }: Props) {
         locationTag: providerLocationTag || null,
 
         // 🚗 mobile/outcall service availability for this specific service.
-        // Only ever true if the provider has also enabled it on their profile.
+        // A mobile-only provider (no shop) has every service mobile by
+        // default; a hybrid provider (shop + mobile) opts in per service.
         availableForMobileService:
-          providerOffersMobile && availableForMobileService,
+          providerIsMobileOnly ||
+          (providerOffersMobile && availableForMobileService),
 
         // 🎭 Inherited from the uploading account — see providerIsDemo above
         isDemo: providerIsDemo,
@@ -706,21 +710,32 @@ export function UploadModal({ onClose }: Props) {
           />
         </label>
 
-        {/* 🚗 Mobile / outcall service availability — only shown if the
-            provider has enabled this on their profile */}
-        {providerOffersMobile && (
-          <label className="flex items-start space-x-2 mb-3 p-2 border rounded bg-gray-50">
-            <input
-              type="checkbox"
-              className="mt-1"
-              checked={availableForMobileService}
-              onChange={(e) => setAvailableForMobileService(e.target.checked)}
-            />
-            <span className="text-sm">
-              Available for housecall / outcall — clients booking this
-              service can request that you come to them.
+        {/* 🚗 Mobile / outcall service availability. Locked on for
+            mobile-only providers (no shop); optional per service for
+            hybrid providers (shop + mobile). */}
+        {providerIsMobileOnly ? (
+          <div className="flex items-start space-x-2 mb-3 p-2 border rounded bg-gray-50">
+            <span className="text-sm text-gray-600">
+              You don&apos;t have a shop location set, so this service is
+              mobile by default — clients will always book you as a
+              housecall.
             </span>
-          </label>
+          </div>
+        ) : (
+          providerOffersMobile && (
+            <label className="flex items-start space-x-2 mb-3 p-2 border rounded bg-gray-50">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={availableForMobileService}
+                onChange={(e) => setAvailableForMobileService(e.target.checked)}
+              />
+              <span className="text-sm">
+                Available for housecall / outcall — clients booking this
+                service can request that you come to them.
+              </span>
+            </label>
+          )
         )}
 
         {/* Discovery facets - only show what makes sense for this category */}

@@ -78,6 +78,7 @@ interface UserProfile {
 
   lat?: number;
   lng?: number;
+  businessLocationType?: "shop" | "mobile_only" | "both";
 }
 
 /* ---------- Local date helpers (avoid UTC shifting) ---------- */
@@ -449,6 +450,9 @@ export default function ClientBookings() {
 
   const providerAddressLine = (p?: UserProfile) => {
     if (!p) return "";
+    if (p.businessLocationType === "mobile_only") {
+      return "Mobile service — comes to your location";
+    }
     const parts = [p.street, p.town, p.county].filter(Boolean);
     return parts.length ? parts.join(", ") : p.location || "";
   };
@@ -464,7 +468,7 @@ export default function ClientBookings() {
   };
 
   const providerMapLink = (p?: UserProfile) => {
-    if (!p) return "";
+    if (!p || p.businessLocationType === "mobile_only") return "";
     if (typeof p.lat === "number" && typeof p.lng === "number") {
       return `https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lng}`;
     }
@@ -673,27 +677,36 @@ export default function ClientBookings() {
               <p>
                 <strong>Provider:</strong> {providerName(b.provider)}
               </p>
-              {addr && (
-                <p>
-                  <strong>Address:</strong> {addr}
+              {b.serviceLocationType === "housecall" ? (
+                <p className="text-sm">
+                  <strong>Housecall:</strong> the provider will come to{" "}
+                  {b.housecallAddress || "the address you provided"}.
                 </p>
-              )}
-              {venue && (
-                <p>
-                  <strong>Venue:</strong> {venue}
-                </p>
-              )}
-              {mapUrl && (
-                <p>
-                  <a
-                    href={mapUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-blue-600 underline"
-                  >
-                    View on Map
-                  </a>
-                </p>
+              ) : (
+                <>
+                  {addr && (
+                    <p>
+                      <strong>Address:</strong> {addr}
+                    </p>
+                  )}
+                  {venue && (
+                    <p>
+                      <strong>Venue:</strong> {venue}
+                    </p>
+                  )}
+                  {mapUrl && (
+                    <p>
+                      <a
+                        href={mapUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-600 underline"
+                      >
+                        View on Map
+                      </a>
+                    </p>
+                  )}
+                </>
               )}
             </div>
 

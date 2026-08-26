@@ -40,6 +40,7 @@ interface UserProfile {
   servicesProvided?: string;
   location?: string;      // generic town/area
   operatingHours?: string;
+  businessLocationType?: 'shop' | 'mobile_only' | 'both';
   // granular location fields
   street?: string;
   building?: string;
@@ -116,6 +117,13 @@ export default function CreatorProfilePage() {
 
   const { fullAddress, mapsHref } = useMemo(() => {
     if (!profile) return { fullAddress: '', mapsHref: '' };
+
+    if (profile.businessLocationType === 'mobile_only') {
+      return {
+        fullAddress: 'Mobile service — comes to your location',
+        mapsHref: '',
+      };
+    }
 
     const parts: string[] = [];
     if (profile.building) parts.push(profile.building);

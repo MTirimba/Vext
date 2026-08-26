@@ -93,6 +93,11 @@ export default function ProfilePage() {
   // Basic fields
   const [isProvider, setIsProvider] = useState(false);
   const [offersMobileService, setOffersMobileService] = useState(false);
+  // 'shop' = clients visit you; 'mobile_only' = no shop, you always travel to
+  // clients; 'both' = you have a shop but also offer housecalls.
+  const [businessLocationType, setBusinessLocationType] = useState<
+    'shop' | 'mobile_only' | 'both'
+  >('shop');
 
   const [username, setUsername] = useState('');
   const [originalUsername, setOriginalUsername] = useState(''); // to know if it’s first set
@@ -163,6 +168,17 @@ export default function ProfilePage() {
       setLocation(d.location || '');
       setIsProvider(!!d.isProvider);
       setOffersMobileService(!!d.offersMobileService);
+      // Fall back for accounts saved before this field existed: infer from
+      // the old boolean so nobody's setting silently resets.
+      setBusinessLocationType(
+        d.businessLocationType === 'mobile_only' ||
+          d.businessLocationType === 'both' ||
+          d.businessLocationType === 'shop'
+          ? d.businessLocationType
+          : d.offersMobileService
+          ? 'both'
+          : 'shop',
+      );
       setBusinessName(d.businessName || '');
       setServices(d.services || '');
       setBio(d.bio || '');
@@ -279,7 +295,8 @@ export default function ProfilePage() {
         updates.businessName = businessName;
         updates.services = services;
         updates.bio = bio;
-        updates.offersMobileService = offersMobileService;
+        updates.offersMobileService = businessLocationType !== 'shop';
+        updates.businessLocationType = businessLocationType;
 
         // Only set businessUsername client-side the first time
         if (!originalBusinessUsername) {
@@ -501,21 +518,57 @@ export default function ProfilePage() {
             </p>
           </label>
 
-          <label className="flex items-center space-x-2">
-            <input
-              type="checkbox"
-              checked={offersMobileService}
-              onChange={e => setOffersMobileService(e.target.checked)}
-            />
-            <span>
-              I offer mobile / outcall services (I can travel to the client)
-            </span>
-          </label>
-          <p className="text-xs text-gray-500 -mt-2">
-            When enabled, you can mark individual services as available for
-            housecall/outcall while uploading them, and clients will be able
-            to request a housecall when booking those services.
-          </p>
+          <fieldset className="border rounded p-3">
+            <legend className="text-sm font-medium px-1">
+              How do clients reach you?
+            </legend>
+            <div className="space-y-2 text-sm">
+              <label className="flex items-start gap-2">
+                <input
+                  type="radio"
+                  name="businessLocationType"
+                  className="mt-1"
+                  checked={businessLocationType === 'shop'}
+                  onChange={() => setBusinessLocationType('shop')}
+                />
+                <span>
+                  I have a shop / location clients visit
+                </span>
+              </label>
+              <label className="flex items-start gap-2">
+                <input
+                  type="radio"
+                  name="businessLocationType"
+                  className="mt-1"
+                  checked={businessLocationType === 'both'}
+                  onChange={() => setBusinessLocationType('both')}
+                />
+                <span>
+                  I have a shop, and I also offer mobile / outcall services
+                </span>
+              </label>
+              <label className="flex items-start gap-2">
+                <input
+                  type="radio"
+                  name="businessLocationType"
+                  className="mt-1"
+                  checked={businessLocationType === 'mobile_only'}
+                  onChange={() => setBusinessLocationType('mobile_only')}
+                />
+                <span>
+                  I don&apos;t have a shop — I only offer mobile / outcall
+                  services (I travel to the client)
+                </span>
+              </label>
+            </div>
+            <p className="text-xs text-gray-500 mt-2">
+              {businessLocationType === 'mobile_only'
+                ? 'Since you have no shop, every service you list will automatically be bookable as a housecall — clients will always be asked for their location instead of yours.'
+                : businessLocationType === 'both'
+                ? 'You can mark individual services as available for housecall/outcall while uploading them, and clients will be able to request a housecall when booking those services.'
+                : 'Clients will see your shop location below and visit you there.'}
+            </p>
+          </fieldset>
 
           <button
             type="button"
@@ -524,6 +577,12 @@ export default function ProfilePage() {
           >
             Use My Current Location
           </button>
+
+          <p className="text-xs text-gray-500 -mt-2">
+            {businessLocationType === 'mobile_only'
+              ? 'Optional: set a general area you operate in (e.g. your home base) — this helps clients find you in search, but won\u2019t be shown as a shop address.'
+              : 'This pin sets the shop address clients will see and be directed to.'}
+          </p>
 
           <LocationPicker
             initialLatLng={lat !== null && lng !== null ? { lat, lng } : undefined}

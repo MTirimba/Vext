@@ -61,10 +61,14 @@ export interface CreatorProfile {
   lat?: number;
   lng?: number;
   operatingHours?: string;
+  businessLocationType?: 'shop' | 'mobile_only' | 'both';
 }
 
 export function buildAddress(p?: CreatorProfile) {
   if (!p) return '';
+  if (p.businessLocationType === 'mobile_only') {
+    return 'Mobile service — comes to your location';
+  }
   const parts: string[] = [];
   if (p.building) parts.push(p.building);
   if (p.room) parts.push(p.room);
@@ -76,7 +80,7 @@ export function buildAddress(p?: CreatorProfile) {
 }
 
 export function mapHref(p?: CreatorProfile) {
-  if (!p) return '';
+  if (!p || p.businessLocationType === 'mobile_only') return '';
   if (typeof p.lat === 'number' && typeof p.lng === 'number') {
     return `https://www.google.com/maps?q=${p.lat},${p.lng}`;
   }

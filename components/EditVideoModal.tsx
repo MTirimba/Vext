@@ -74,6 +74,7 @@ export function EditVideoModal({
   // 🚗 mobile/outcall service — only shown if the owning provider has
   // enabled this on their profile
   const [providerOffersMobile, setProviderOffersMobile] = useState(false);
+  const [providerIsMobileOnly, setProviderIsMobileOnly] = useState(false);
   const [availableForMobileService, setAvailableForMobileService] =
     useState<boolean>(!!video.availableForMobileService);
 
@@ -85,6 +86,7 @@ export function EditVideoModal({
         if (!snap.exists()) return;
         const d = snap.data() as any;
         setProviderOffersMobile(!!d.offersMobileService);
+        setProviderIsMobileOnly(d.businessLocationType === 'mobile_only');
       } catch (err) {
         console.error('EditVideoModal: failed to load provider profile', err);
       }
@@ -306,8 +308,11 @@ export function EditVideoModal({
       specialInstructions: specialInstructions.trim() || null,
       serviceIncludes: includes,
       notProvided,
-      // 🚗 Only ever true if the provider still has this enabled on their profile
-      availableForMobileService: providerOffersMobile && availableForMobileService,
+      // 🚗 A mobile-only provider has no shop, so every service they offer
+      // is a housecall by definition — no need for a per-service opt-in.
+      availableForMobileService:
+        providerIsMobileOnly ||
+        (providerOffersMobile && availableForMobileService),
     };
 
     if (categoryId && selectedCategory && selectedSubcategory) {
@@ -508,21 +513,32 @@ export function EditVideoModal({
           />
         </label>
 
-        {/* 🚗 Mobile / outcall service availability — only shown if the
-            provider has enabled this on their profile */}
-        {providerOffersMobile && (
-          <label className="flex items-start space-x-2 p-2 border rounded bg-gray-50">
-            <input
-              type="checkbox"
-              className="mt-1"
-              checked={availableForMobileService}
-              onChange={(e) => setAvailableForMobileService(e.target.checked)}
-            />
-            <span className="text-sm">
-              Available for housecall / outcall — clients booking this
-              service can request that you come to them.
+        {/* 🚗 Mobile / outcall service availability. A mobile-only provider
+            (no shop location) has this locked on for every service; a
+            hybrid provider (shop + mobile) can opt individual services in. */}
+        {providerIsMobileOnly ? (
+          <div className="flex items-start space-x-2 p-2 border rounded bg-gray-50">
+            <span className="text-sm text-gray-600">
+              You don&apos;t have a shop location set, so this service is
+              mobile by default — clients will always book you as a
+              housecall.
             </span>
-          </label>
+          </div>
+        ) : (
+          providerOffersMobile && (
+            <label className="flex items-start space-x-2 p-2 border rounded bg-gray-50">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={availableForMobileService}
+                onChange={(e) => setAvailableForMobileService(e.target.checked)}
+              />
+              <span className="text-sm">
+                Available for housecall / outcall — clients booking this
+                service can request that you come to them.
+              </span>
+            </label>
+          )
         )}
 
         {/* Discovery facets */}
