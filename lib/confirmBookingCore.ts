@@ -7,6 +7,23 @@ export type ConfirmBookingInput = {
   method: string;
   previousTime?: string;
   walletPay?: boolean;
+  /**
+   * For method === "paystack" only. Pass the amount (in KES, i.e. already
+   * divided by 100) that a channel with its own independent authority over
+   * the figure has confirmed was actually paid:
+   *  - the Paystack webhook passes this straight from the signature-verified
+   *    webhook payload (no extra API call needed — the signature already
+   *    proves Paystack sent it).
+   *  - the client-triggered /api/confirm-booking route does NOT have an
+   *    independently-verified figure (the browser could lie about it), so it
+   *    omits this and confirmBookingCore instead calls Paystack's own
+   *    transaction-verify API using `paymentRef` to fetch the authoritative
+   *    amount itself.
+   * Either way, a client can never talk its way into a confirmed booking by
+   * simply claiming payment succeeded — the amount is always checked against
+   * a source Paystack (not the browser) controls.
+   */
+  verifiedPaystackAmount?: number;
 };
 
 export type ConfirmBookingResult =
@@ -20,9 +37,50 @@ export type ConfirmBookingResult =
         providerAmount: number;
         platformFee: number;
         walletTxId?: string;
+        alreadyConfirmed?: true;
       };
     }
   | { ok: false; status: number; body: { error: string } };
+
+// Rounding on both the client and Paystack's side (KES <-> kobo/cents
+// conversion) can leave a few cents of slack — allow it, but nothing more.
+const PAYSTACK_AMOUNT_TOLERANCE_KES = 1;
+
+/**
+ * Calls Paystack's own transaction-verify API — the one channel a client
+ * cannot spoof — to find out what was actually paid for a given reference.
+ * Used when we don't already have an amount from a signature-verified
+ * webhook payload.
+ */
+async function verifyPaystackTransaction(
+  reference: string,
+): Promise<{ ok: true; amountKes: number; status: string } | { ok: false; error: string }> {
+  const secret = process.env.PAYSTACK_SECRET_KEY || "";
+  if (!secret) {
+    return { ok: false, error: "Paystack secret key is not configured" };
+  }
+
+  try {
+    const res = await fetch(
+      `https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`,
+      { headers: { Authorization: `Bearer ${secret}` } },
+    );
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json?.data) {
+      return {
+        ok: false,
+        error: json?.message || "Could not verify transaction with Paystack",
+      };
+    }
+    const amountKes = Number(json.data.amount) / 100;
+    return { ok: true, amountKes, status: String(json.data.status || "") };
+  } catch (err: any) {
+    return {
+      ok: false,
+      error: err?.message || "Paystack verification request failed",
+    };
+  }
+}
 
 /**
  * Core booking-confirmation logic, extracted so it can be called either:
@@ -31,7 +89,8 @@ export type ConfirmBookingResult =
  *  - directly (no HTTP hop, no user token) from server-side code that has
  *    already independently verified payment — e.g. the Pesapal callback,
  *    which confirms status via a server-to-server call to Pesapal's API
- *    before ever reaching this function.
+ *    before ever reaching this function, or the Paystack webhook, which
+ *    passes the signature-verified amount straight through.
  *
  * IMPORTANT: this function does NOT check booking ownership. Callers that
  * accept a request from an end user (i.e. the API route) MUST check that
@@ -40,7 +99,8 @@ export type ConfirmBookingResult =
 export async function confirmBookingCore(
   input: ConfirmBookingInput,
 ): Promise<ConfirmBookingResult> {
-  const { bookingId, paymentRef, method, previousTime, walletPay } = input;
+  const { bookingId, paymentRef, method, previousTime, walletPay, verifiedPaystackAmount } =
+    input;
 
   if (!bookingId || !method) {
     return { ok: false, status: 400, body: { error: "Missing bookingId or method" } };
@@ -62,6 +122,27 @@ export async function confirmBookingCore(
   }
 
   const booking = bookingSnap.data() as any;
+
+  // 🔐 Idempotency: both the client-side Paystack callback and the Paystack
+  // webhook typically fire for the same successful payment. Re-running the
+  // logic below a second time would double-write platform_earnings and
+  // could double-debit a wallet. If this booking is already confirmed,
+  // treat any further confirmation attempt for it as a harmless no-op.
+  if (booking.status === "confirmed") {
+    return {
+      ok: true,
+      status: 200,
+      body: {
+        success: true,
+        message: "Booking already confirmed",
+        commission: Number(booking.commission) || 0,
+        providerAmount: Number(booking.providerAmount) || 0,
+        platformFee: Number(booking.platformFee) || 0,
+        alreadyConfirmed: true,
+      },
+    };
+  }
+
   const { providerId, date, time, total, clientId } = booking;
 
   if (!providerId || !date || !time) {
@@ -71,6 +152,54 @@ export async function confirmBookingCore(
   const totalNumber = Number(total);
   if (!Number.isFinite(totalNumber) || totalNumber <= 0) {
     return { ok: false, status: 400, body: { error: "Invalid booking total" } };
+  }
+
+  // 🔐 Paystack: never take a client's word that payment succeeded. Find out
+  // what was actually paid from a channel Paystack itself controls, and
+  // refuse to confirm if it falls short of the booking's authoritative total
+  // (which already includes the logistics fee for housecalls).
+  if (method === "paystack") {
+    let paidAmountKes: number;
+
+    if (typeof verifiedPaystackAmount === "number") {
+      // Already verified by the caller via a signature-checked webhook
+      // payload — no need to hit Paystack's API again.
+      paidAmountKes = verifiedPaystackAmount;
+    } else {
+      if (!paymentRef) {
+        return {
+          ok: false,
+          status: 400,
+          body: { error: "Missing paymentRef for paystack verification" },
+        };
+      }
+      const verification = await verifyPaystackTransaction(paymentRef);
+      if (!verification.ok) {
+        return {
+          ok: false,
+          status: 502,
+          body: { error: `Could not verify Paystack payment: ${verification.error}` },
+        };
+      }
+      if (verification.status !== "success") {
+        return {
+          ok: false,
+          status: 400,
+          body: { error: "Paystack transaction was not successful" },
+        };
+      }
+      paidAmountKes = verification.amountKes;
+    }
+
+    if (paidAmountKes < totalNumber - PAYSTACK_AMOUNT_TOLERANCE_KES) {
+      return {
+        ok: false,
+        status: 400,
+        body: {
+          error: `Amount paid (KSHS ${paidAmountKes}) does not cover the booking total (KSHS ${totalNumber}).`,
+        },
+      };
+    }
   }
 
   // 🚫 Prevent double confirmation for the same provider/date/time

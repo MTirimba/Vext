@@ -2,14 +2,20 @@
 import { NextResponse } from "next/server";
 import crypto from "crypto";
 import { adminDb } from "@/lib/firebaseAdmin";
+import { confirmBookingCore } from "@/lib/confirmBookingCore";
 
 /**
  * Universal Paystack webhook for both payments & payouts
  *
  * ⚠️ NOTE:
- * - We no longer compute a flat 10% platform cut here.
- * - Fee breakdown (platformFee / providerAmount) is handled in /api/confirm-booking
- *   and on the booking document itself.
+ * - Fee breakdown (platformFee / providerAmount) is computed by
+ *   confirmBookingCore(), the same function /api/confirm-booking uses — this
+ *   webhook is just a second, server-to-server route into it, using the
+ *   amount from this signature-verified payload instead of trusting a
+ *   client's claim that payment succeeded.
+ * - confirmBookingCore() is idempotent: if /api/confirm-booking (triggered
+ *   client-side right after the Paystack popup closes) already confirmed
+ *   this booking, calling it again here is a harmless no-op.
  */
 export async function POST(req: Request) {
   try {
@@ -42,14 +48,13 @@ export async function POST(req: Request) {
         console.warn("⚠️ charge.success without bookingId metadata");
       } else {
         const bookingRef = adminDb.collection("bookings").doc(bookingId);
-
         const amountPaid = typeof data.amount === "number" ? data.amount / 100 : null;
 
-        // ✅ Mark booking as paid/confirmed &
-        //    store Paystack reference + raw payload (no commission math here)
+        // Always record the raw payment audit trail, regardless of whether
+        // confirmation below succeeds — useful for reconciling any flagged
+        // mismatch later.
         await bookingRef.set(
           {
-            status: "confirmed",
             paymentRef: data.reference,
             paymentReference: data.reference, // legacy field name, kept for compatibility
             paymentMethod: "paystack",
@@ -62,6 +67,29 @@ export async function POST(req: Request) {
           },
           { merge: true },
         );
+
+        // 🔐 Confirm through the same path /api/confirm-booking uses, passing
+        // the amount straight from this signature-verified payload — no need
+        // to hit Paystack's API again, and no trusting the client.
+        const result = await confirmBookingCore({
+          bookingId,
+          paymentRef: data.reference,
+          method: "paystack",
+          verifiedPaystackAmount: amountPaid ?? 0,
+        });
+
+        if (!result.ok) {
+          // Don't throw — Paystack will retry the webhook on a non-2xx
+          // response, and retrying won't fix a genuine amount mismatch.
+          // Flag it for manual review instead.
+          console.error(
+            `⚠️ Paystack webhook: booking ${bookingId} not confirmed — ${result.body.error}`,
+          );
+          await bookingRef.set(
+            { paymentIntegrityFlag: result.body.error, updatedAt: Date.now() },
+            { merge: true },
+          );
+        }
       }
     }
 
