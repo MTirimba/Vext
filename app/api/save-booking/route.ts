@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
 import { requireAuth } from "@/lib/requireAuth";
+import { computeLogisticsFee, parseLogisticsConfig } from "@/lib/logistics";
 import crypto from "crypto";
 
 // helper: generate short code like "42AB"
@@ -151,6 +152,27 @@ export async function POST(req: NextRequest) {
           }
         : null;
 
+    // Get provider details — fetched once, up front, and reused below for
+    // the mobile-availability check and the logistics fee calculation.
+    const providerSnap = await adminDb
+      .collection("users")
+      .doc(providerId)
+      .get();
+    if (!providerSnap.exists) {
+      return NextResponse.json(
+        { error: "Provider not found" },
+        { status: 404 },
+      );
+    }
+
+    const provider = providerSnap.data() as any;
+    if (!provider?.businessPhone) {
+      return NextResponse.json(
+        { error: "Provider business phone is missing" },
+        { status: 400 },
+      );
+    }
+
     if (safeServiceLocationType === "housecall") {
       // "Services offered" (the simple provider price-list, distinct from
       // uploaded videos) use synthetic ids like `svc_<id>` since they don't
@@ -159,14 +181,7 @@ export async function POST(req: NextRequest) {
       let offersMobile = false;
       if (typeof videoId === "string" && videoId.startsWith("svc_")) {
         const svcId = videoId.slice("svc_".length);
-        const providerSnapForSvc = await adminDb
-          .collection("users")
-          .doc(providerId)
-          .get();
-        const offered: any[] =
-          (providerSnapForSvc.exists &&
-            (providerSnapForSvc.data() as any)?.servicesOffered) ||
-          [];
+        const offered: any[] = provider?.servicesOffered || [];
         const svc = offered.find((s) => s?.id === svcId);
         offersMobile = !!svc?.availableForMobileService;
       } else {
@@ -183,24 +198,30 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Get provider details
-    const providerSnap = await adminDb
-      .collection("users")
-      .doc(providerId)
-      .get();
-    if (!providerSnap.exists) {
-      return NextResponse.json(
-        { error: "Provider not found" },
-        { status: 404 },
-      );
-    }
+    // 🚗💰 Logistics fee for housecall bookings — computed server-side from
+    // the platform-wide rate in config/pricing, never trusted from the
+    // client. Added on top of both `total` and `subtotal` equally so the
+    // markup calculation elsewhere is unaffected and the fee flows 100% to
+    // the provider (see providerAmount below).
+    let logisticsFee = 0;
+    let logisticsDistanceKm: number | null = null;
+    let logisticsFeeFallbackUsed = false;
 
-    const provider = providerSnap.data();
-    if (!provider?.businessPhone) {
-      return NextResponse.json(
-        { error: "Provider business phone is missing" },
-        { status: 400 },
+    if (safeServiceLocationType === "housecall") {
+      const pricingSnap = await adminDb.collection("config").doc("pricing").get();
+      const logisticsCfg = parseLogisticsConfig(
+        pricingSnap.exists ? (pricingSnap.data() as any)?.logistics : null,
       );
+      const result = computeLogisticsFee({
+        providerLat: typeof provider?.lat === "number" ? provider.lat : null,
+        providerLng: typeof provider?.lng === "number" ? provider.lng : null,
+        clientLat: safeHousecallGeo?.lat ?? null,
+        clientLng: safeHousecallGeo?.lng ?? null,
+        config: logisticsCfg,
+      });
+      logisticsFee = result.fee;
+      logisticsDistanceKm = result.distanceKm;
+      logisticsFeeFallbackUsed = result.usedFallback;
     }
 
     const slotsRef = adminDb.collection("booked_slots");
@@ -270,13 +291,13 @@ export async function POST(req: NextRequest) {
       await existingRef.update({
         date,
         time,
-        total,
-        subtotal: safeSubtotal,
+        total: total + logisticsFee,
+        subtotal: safeSubtotal + logisticsFee,
         markupAmount: safeMarkupAmount,
         markupRate: safeMarkupRate,
         markupPercent: safeMarkupPercent,
         platformFee: safeMarkupAmount,
-        providerAmount: safeSubtotal,
+        providerAmount: safeSubtotal + logisticsFee,
         addons: addons || [],
         status: "pending", // reset to pending until payment confirmed
         updatedAt: Date.now(),
@@ -290,6 +311,11 @@ export async function POST(req: NextRequest) {
         housecallAddress:
           safeServiceLocationType === "housecall" ? safeHousecallAddress : null,
         housecallGeo: safeHousecallGeo,
+        logisticsFee: safeServiceLocationType === "housecall" ? logisticsFee : 0,
+        logisticsDistanceKm:
+          safeServiceLocationType === "housecall" ? logisticsDistanceKm : null,
+        logisticsFeeFallbackUsed:
+          safeServiceLocationType === "housecall" ? logisticsFeeFallbackUsed : false,
       });
 
       return NextResponse.json({ bookingId, updated: true }, { status: 200 });
@@ -324,13 +350,13 @@ export async function POST(req: NextRequest) {
       videoId,
       date,
       time,
-      subtotal: safeSubtotal,
-      total,
+      subtotal: safeSubtotal + logisticsFee,
+      total: total + logisticsFee,
       markupAmount: safeMarkupAmount,
       markupRate: safeMarkupRate,
       markupPercent: safeMarkupPercent,
       platformFee: safeMarkupAmount,
-      providerAmount: safeSubtotal,
+      providerAmount: safeSubtotal + logisticsFee,
       addons: addons || [],
       status: "pending",
       createdAt: Date.now(),
@@ -348,6 +374,11 @@ export async function POST(req: NextRequest) {
       housecallAddress:
         safeServiceLocationType === "housecall" ? safeHousecallAddress : null,
       housecallGeo: safeHousecallGeo,
+      logisticsFee: safeServiceLocationType === "housecall" ? logisticsFee : 0,
+      logisticsDistanceKm:
+        safeServiceLocationType === "housecall" ? logisticsDistanceKm : null,
+      logisticsFeeFallbackUsed:
+        safeServiceLocationType === "housecall" ? logisticsFeeFallbackUsed : false,
     });
 
     return NextResponse.json(
@@ -355,6 +386,9 @@ export async function POST(req: NextRequest) {
         bookingId: bookingRef.id,
         shortId,
         completionPin, // 🔐 send PIN to frontend (booking modal / summary)
+        total: total + logisticsFee,
+        logisticsFee,
+        logisticsDistanceKm,
       },
       { status: 200 },
     );

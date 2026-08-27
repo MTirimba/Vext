@@ -25,6 +25,11 @@ import {
   MarkupTier,
   parseMarkupTiers,
 } from '@/lib/pricing';
+import {
+  DEFAULT_LOGISTICS_CONFIG,
+  LogisticsConfig,
+  parseLogisticsConfig,
+} from '@/lib/logistics';
 
 import WithdrawModal from '@/components/WithdrawModal';
 
@@ -61,6 +66,12 @@ export default function AdminPage() {
     useState<MarkupTier[]>(DEFAULT_MARKUP_TIERS);
   const [markupLoading, setMarkupLoading] = useState(true);
   const [markupSaving, setMarkupSaving] = useState(false);
+
+  // 🚗 Logistics (housecall travel fee) config
+  const [logisticsCfg, setLogisticsCfg] = useState<LogisticsConfig>(
+    DEFAULT_LOGISTICS_CONFIG,
+  );
+  const [logisticsSaving, setLogisticsSaving] = useState(false);
 
   // --------- Finance tab extra state ---------
   const [financeSubTab, setFinanceSubTab] = useState<
@@ -168,8 +179,10 @@ export default function AdminPage() {
         if (snap.exists()) {
           const data = snap.data() as any;
           setMarkupTiers(parseMarkupTiers(data.tiers));
+          setLogisticsCfg(parseLogisticsConfig(data.logistics));
         } else {
           setMarkupTiers(DEFAULT_MARKUP_TIERS);
+          setLogisticsCfg(DEFAULT_LOGISTICS_CONFIG);
         }
       } catch (err) {
         console.error('admin pricing config load error', err);
@@ -539,6 +552,23 @@ export default function AdminPage() {
       alert('Could not save markup settings. Please try again.');
     } finally {
       setMarkupSaving(false);
+    }
+  };
+
+  const handleSaveLogistics = async () => {
+    try {
+      setLogisticsSaving(true);
+      await setDoc(
+        doc(db, 'config', 'pricing'),
+        { logistics: logisticsCfg },
+        { merge: true },
+      );
+      alert('Logistics fee settings saved.');
+    } catch (err) {
+      console.error('save logistics config error', err);
+      alert('Could not save logistics settings. Please try again.');
+    } finally {
+      setLogisticsSaving(false);
     }
   };
 
@@ -1264,6 +1294,126 @@ export default function AdminPage() {
             <code>min ≤ base price &lt; max</code>. Leave{' '}
             <strong>max</strong> blank on the last tier to apply it to
             all higher prices.
+          </p>
+
+          <hr className="my-8" />
+
+          <h2 className="mb-3 text-xl font-semibold">
+            Housecall logistics fee
+          </h2>
+          <p className="mb-4 text-sm text-gray-600">
+            One platform-wide rate for housecall/outcall bookings — charged
+            to the client on top of the service price and paid to the
+            provider in full, so there&apos;s nothing for the two of them to
+            negotiate before booking.
+          </p>
+
+          <div className="mb-4 grid max-w-md grid-cols-2 gap-4 text-sm">
+            <label className="block">
+              <span className="block text-gray-600 mb-1">
+                Base fee (KSHS)
+              </span>
+              <input
+                type="number"
+                className="w-full rounded border px-2 py-1"
+                min={0}
+                value={logisticsCfg.baseFee}
+                onChange={(e) =>
+                  setLogisticsCfg((prev) => ({
+                    ...prev,
+                    baseFee: Number(e.target.value) || 0,
+                  }))
+                }
+              />
+            </label>
+            <label className="block">
+              <span className="block text-gray-600 mb-1">
+                Per-km rate (KSHS)
+              </span>
+              <input
+                type="number"
+                className="w-full rounded border px-2 py-1"
+                min={0}
+                value={logisticsCfg.perKmRate}
+                onChange={(e) =>
+                  setLogisticsCfg((prev) => ({
+                    ...prev,
+                    perKmRate: Number(e.target.value) || 0,
+                  }))
+                }
+              />
+            </label>
+            <label className="block">
+              <span className="block text-gray-600 mb-1">
+                Minimum fee (KSHS)
+              </span>
+              <input
+                type="number"
+                className="w-full rounded border px-2 py-1"
+                min={0}
+                value={logisticsCfg.minFee}
+                onChange={(e) =>
+                  setLogisticsCfg((prev) => ({
+                    ...prev,
+                    minFee: Number(e.target.value) || 0,
+                  }))
+                }
+              />
+            </label>
+            <label className="block">
+              <span className="block text-gray-600 mb-1">
+                Maximum fee (KSHS, blank = no cap)
+              </span>
+              <input
+                type="number"
+                className="w-full rounded border px-2 py-1"
+                min={0}
+                value={logisticsCfg.maxFee ?? ''}
+                placeholder="No max"
+                onChange={(e) =>
+                  setLogisticsCfg((prev) => ({
+                    ...prev,
+                    maxFee:
+                      e.target.value === '' ? null : Number(e.target.value) || 0,
+                  }))
+                }
+              />
+            </label>
+            <label className="block col-span-2">
+              <span className="block text-gray-600 mb-1">
+                Fallback flat fee when the provider has no pinned location
+                (KSHS)
+              </span>
+              <input
+                type="number"
+                className="w-full rounded border px-2 py-1"
+                min={0}
+                value={logisticsCfg.noProviderLocationFallbackFee}
+                onChange={(e) =>
+                  setLogisticsCfg((prev) => ({
+                    ...prev,
+                    noProviderLocationFallbackFee:
+                      Number(e.target.value) || 0,
+                  }))
+                }
+              />
+            </label>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleSaveLogistics}
+            disabled={logisticsSaving}
+            className="rounded bg-black px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
+          >
+            {logisticsSaving ? 'Saving…' : 'Save logistics settings'}
+          </button>
+
+          <p className="mt-4 text-xs text-gray-500">
+            Fee = base fee + (per-km rate × straight-line distance between
+            provider and client pins), clamped to the min/max above. This
+            fee is never marked up — it's added on top of the client's total
+            and paid to the provider in full.
           </p>
         </div>
       )}

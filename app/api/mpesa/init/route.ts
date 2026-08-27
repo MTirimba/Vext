@@ -84,6 +84,32 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Invalid amount" }, { status: 400 });
     }
 
+    // 🔐 For booking payments (not wallet top-ups), never trust the amount
+    // the client sent — it's the same total a client could otherwise use to
+    // under-pay a housecall's logistics fee. Re-read it from the booking
+    // doc that /api/save-booking already computed server-side.
+    let chargeAmount = parsedAmount;
+    if (!isWalletDeposit && bookingId) {
+      const bookingSnap = await adminDb
+        .collection("bookings")
+        .doc(bookingId)
+        .get();
+      if (!bookingSnap.exists) {
+        return NextResponse.json(
+          { error: "Booking not found" },
+          { status: 404 },
+        );
+      }
+      const bookingTotal = Number((bookingSnap.data() as any)?.total);
+      if (!Number.isFinite(bookingTotal) || bookingTotal <= 0) {
+        return NextResponse.json(
+          { error: "Booking has no valid total to charge" },
+          { status: 400 },
+        );
+      }
+      chargeAmount = bookingTotal;
+    }
+
     const sanitizedPhone = sanitizePhone(phoneNumber);
 
     // 🔐 Load credentials dynamically
@@ -199,7 +225,7 @@ export async function POST(req: NextRequest) {
       Password: password,
       Timestamp: timestamp,
       TransactionType: "CustomerBuyGoodsOnline", // For Till Number
-      Amount: parsedAmount,
+      Amount: chargeAmount,
       PartyA: sanitizedPhone, // Customer number
       PartyB: tillNumber, // Till number
       PhoneNumber: sanitizedPhone,

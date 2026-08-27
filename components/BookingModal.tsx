@@ -28,6 +28,11 @@ import HousecallAddressPicker, {
   isHousecallAddressComplete,
   type HousecallAddress,
 } from "./HousecallAddressPicker";
+import {
+  computeLogisticsFee,
+  parseLogisticsConfig,
+  type LogisticsConfig,
+} from "@/lib/logistics";
 
 async function serverLog(data: any) {
   try {
@@ -291,6 +296,11 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
   // 🚗 true if the provider has no shop at all — every booking with them is
   // a housecall, so we skip the onsite/housecall choice entirely
   const [providerIsMobileOnly, setProviderIsMobileOnly] = useState(false);
+  const [providerCoords, setProviderCoords] = useState<{
+    lat: number | null;
+    lng: number | null;
+  }>({ lat: null, lng: null });
+  const [logisticsConfig, setLogisticsConfig] = useState<LogisticsConfig>();
 
   // 💰 Wallet balance (client-side view)
   const [walletBalance, setWalletBalance] = useState<number | null>(null);
@@ -323,6 +333,23 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
   const extrasForDisplay = withMarkup(addonsRawTotal);
   const markupAmount = totalWithMarkup - Math.round(subtotalRaw);
 
+  // 🚗 Logistics/travel fee for housecall bookings — distance-based, one
+  // platform-wide rate, goes 100% to the provider (never marked up). This is
+  // what removes the need for the client and provider to negotiate a
+  // travel cost between themselves before booking.
+  const logisticsResult =
+    serviceLocationType === "housecall"
+      ? computeLogisticsFee({
+          providerLat: providerCoords.lat,
+          providerLng: providerCoords.lng,
+          clientLat: housecallDetails.lat,
+          clientLng: housecallDetails.lng,
+          config: logisticsConfig,
+        })
+      : { fee: 0, distanceKm: null, usedFallback: false };
+  const logisticsFee = logisticsResult.fee;
+  const grandTotal = totalWithMarkup + logisticsFee;
+
   const specialInstructions = video.specialInstructions || "";
   const includes = video.serviceIncludes || [];
   const notProvided = video.notProvided || [];
@@ -349,6 +376,7 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
             }));
             setMarkupConfig({ tiers });
           }
+          setLogisticsConfig(parseLogisticsConfig(data.logistics));
         }
       } catch (err) {
         console.error("load markup config error", err);
@@ -403,6 +431,10 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
         const mobileOnly = prof?.businessLocationType === "mobile_only";
         setProviderIsMobileOnly(mobileOnly);
         if (mobileOnly) setServiceLocationType("housecall");
+        setProviderCoords({
+          lat: typeof prof?.lat === "number" ? prof.lat : null,
+          lng: typeof prof?.lng === "number" ? prof.lng : null,
+        });
       } catch {
         setProviderSchedule(normalizeScheduleFromProfile(null));
       }
@@ -574,7 +606,7 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
           ref: data.paymentRef || undefined,
           dateISO,
           time: data.time || selectedTime,
-          total: data.total || totalWithMarkup,
+          total: data.total || grandTotal,
           serviceTitle: undefined,
           completionPin: completionPin || undefined,
         });
@@ -617,7 +649,7 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
         );
         return;
       }
-      if (walletBalance < totalWithMarkup) {
+      if (walletBalance < grandTotal) {
         alert(
           "Your wallet balance is not enough to pay for this booking. Please deposit more or choose another payment method.",
         );
@@ -708,7 +740,7 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
             ref: confirmData?.walletTxId || undefined,
             dateISO,
             time: selectedTime,
-            total: totalWithMarkup,
+            total: grandTotal,
             completionPin:
               saveData.completionPin || completionPin || undefined,
           });
@@ -752,7 +784,7 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             email: user?.email || "noemail@vextup.com",
-            amount: totalWithMarkup,
+            amount: grandTotal,
             metadata: { bookingId },
           }),
         });
@@ -765,7 +797,7 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
         const handler = PaystackLib.setup({
           key: process.env.NEXT_PUBLIC_PAYSTACK_KEY!,
           email: user?.email || "noemail@vextup.com",
-          amount: Math.round(totalWithMarkup * 100),
+          amount: Math.round(grandTotal * 100),
           currency: "KES",
           ref: initData.reference,
           metadata: { bookingId },
@@ -794,7 +826,7 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
                   ref: response.reference,
                   dateISO,
                   time: selectedTime,
-                  total: totalWithMarkup,
+                  total: grandTotal,
                   completionPin:
                     saveData.completionPin || completionPin || undefined,
                 });
@@ -823,7 +855,7 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             phoneNumber: msisdn,
-            amount: totalWithMarkup,
+            amount: grandTotal,
             bookingId,
           }),
         });
@@ -885,7 +917,7 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
   const walletInsufficient =
     paymentMethod === "wallet" &&
     walletBalance != null &&
-    walletBalance < totalWithMarkup;
+    walletBalance < grandTotal;
 
   return (
     <>
@@ -1174,10 +1206,26 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
                             </span>
                           </div>
                         )}
+                        {serviceLocationType === "housecall" && (
+                          <div className="flex justify-between">
+                            <span>
+                              Logistics fee
+                              {logisticsResult.distanceKm != null && (
+                                <span className="text-gray-500">
+                                  {" "}
+                                  ({logisticsResult.distanceKm} km)
+                                </span>
+                              )}
+                            </span>
+                            <span className="tabular-nums">
+                              KSHS {logisticsFee}
+                            </span>
+                          </div>
+                        )}
                         <div className="flex justify-between font-semibold mt-1">
                           <span>Total</span>
                           <span className="tabular-nums">
-                            KSHS {totalWithMarkup}
+                            KSHS {grandTotal}
                           </span>
                         </div>
                       </div>
@@ -1237,8 +1285,9 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
                                 onChange={setHousecallDetails}
                               />
                               <p className="text-xs text-gray-500 mt-2">
-                                Your provider may charge extra for travel —
-                                confirm with them directly if unsure.
+                                {logisticsResult.usedFallback
+                                  ? `A flat logistics fee of KSHS ${logisticsFee} applies since this provider hasn't set a base location — it's already included in your total above.`
+                                  : `A logistics fee of KSHS ${logisticsFee} for the provider's travel is already included in your total above — no need to arrange payment for it separately.`}
                               </p>
                             </div>
                           )}
@@ -1280,7 +1329,7 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
                       <p>Date: {selectedDate.toDateString()}</p>
                       <p>Time: {selectedTime}</p>
                       <p className="mt-2 font-semibold">
-                        Total: KSHS {totalWithMarkup}
+                        Total: KSHS {grandTotal}
                       </p>
 
                       {video.availableForMobileService && (
@@ -1319,7 +1368,7 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
                           disabled={
                             walletBalance == null ||
                             walletBalance <= 0 ||
-                            walletBalance < totalWithMarkup
+                            walletBalance < grandTotal
                           }
                         >
                           {walletBalance == null
@@ -1336,7 +1385,7 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
                         </p>
                       )}
                       {walletBalance != null &&
-                        walletBalance < totalWithMarkup && (
+                        walletBalance < grandTotal && (
                           <p className="mt-1 text-xs text-red-600">
                             Wallet balance is not enough for this booking.
                           </p>
