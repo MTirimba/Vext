@@ -1636,7 +1636,16 @@ export default function VideoFeed() {
               </div>
 
               {isOwner && (
-                <div className="absolute top-16 right-3 flex flex-col space-y-1 z-50">
+                <div
+                  className="absolute right-3 flex flex-col space-y-1 z-50"
+                  style={{
+                    // 🔒 FIX: this block was the one spot still using a bare
+                    // Tailwind top-16 with no safe-area offset at all, so it
+                    // sat too high (under the notch) on some devices even
+                    // once viewport-fit=cover was turned on elsewhere.
+                    top: "calc(env(safe-area-inset-top, 0px) + 4rem)",
+                  }}
+                >
                   <button
                     onClick={() => setEditingVideo(v)}
                     className="bg-yellow-500 hover:bg-yellow-600 text-white text-xs px-2 py-1 rounded"
