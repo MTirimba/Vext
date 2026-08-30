@@ -6,15 +6,20 @@ import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "@/lib/firebase";
 import VideoFeed from "@/components/VideoFeed";
 import SplashScreen from "@/components/SplashScreen";
+import TutorialChat from "@/components/TutorialChat";
+import { useTutorialFlag } from "@/hooks/useTutorialFlag";
+import { VISITOR_TUTORIAL_STEPS } from "@/lib/tutorialSteps";
 import { motion, AnimatePresence } from "framer-motion";
 
 export default function DashboardPage() {
   const router = useRouter();
   const [showSplash, setShowSplash] = useState(true);
+  const [uid, setUid] = useState<string | null>(null);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
       if (!user) router.push("/");
+      else setUid(user.uid);
     });
     return () => unsub();
   }, [router]);
@@ -24,6 +29,18 @@ export default function DashboardPage() {
     const t = setTimeout(() => setShowSplash(false), 2500);
     return () => clearTimeout(t);
   }, [showSplash]);
+
+  // Same visitor tutorial as the signed-out landing page — someone could
+  // hit /dashboard as their first ever screen (e.g. a bookmarked link)
+  // without having seen it there first.
+  const { loading: tutorialLoading, seen: tutorialSeen, markSeen, replayToken } =
+    useTutorialFlag("visitor", uid);
+  const [tutorialOpen, setTutorialOpen] = useState(false);
+
+  useEffect(() => {
+    if (showSplash || tutorialLoading || tutorialSeen) return;
+    setTutorialOpen(true);
+  }, [showSplash, tutorialLoading, tutorialSeen]);
 
   return (
     <main
@@ -50,6 +67,16 @@ export default function DashboardPage() {
           <SplashScreen onFinish={() => setShowSplash(false)} />
         )}
       </AnimatePresence>
+
+      <TutorialChat
+        steps={VISITOR_TUTORIAL_STEPS}
+        open={tutorialOpen}
+        resetKey={replayToken}
+        onFinish={() => {
+          setTutorialOpen(false);
+          markSeen();
+        }}
+      />
     </main>
   );
 }

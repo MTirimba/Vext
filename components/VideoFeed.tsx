@@ -1068,6 +1068,7 @@ export default function VideoFeed() {
                 if (!next) setSearchTerm("");
               }
             }}
+            data-tutorial="search"
             className="h-8 w-8 flex items-center justify-center text-white hover:text-gray-300 transition"
             aria-label={searchOpen ? "Close search" : "Open search"}
           >
@@ -1095,6 +1096,7 @@ export default function VideoFeed() {
         <button
           type="button"
           onClick={() => setFiltersOpen((prev) => !prev)}
+          data-tutorial="filters"
           className="h-8 w-8 flex items-center justify-center text-white hover:text-gray-300 transition"
           aria-label="Filter services"
         >
@@ -1105,6 +1107,7 @@ export default function VideoFeed() {
         <div className="relative">
           <button
             onClick={() => setDropdownOpen(!dropdownOpen)}
+            data-tutorial="profile-menu"
             className="focus:outline-none relative h-8 w-8 flex items-center justify-center"
           >
             <FaUser className="w-5 h-5" />
@@ -1608,7 +1611,7 @@ export default function VideoFeed() {
                   bottom: "calc(env(safe-area-inset-bottom, 0px) + 1rem)",
                 }}
               >
-                <button onClick={() => handleLike(v.id)} className="text-xl">
+                <button onClick={() => handleLike(v.id)} data-tutorial="like-button" className="text-xl">
                   {liked ? (
                     <FaHeart className="text-red-500" />
                   ) : (
@@ -1617,12 +1620,14 @@ export default function VideoFeed() {
                 </button>
                 <button
                   className="text-xl"
+                  data-tutorial="comment-button"
                   onClick={() => setCommentVideo(v.id)}
                 >
                   <FaCommentDots />
                 </button>
                 <button
                   className="text-xl"
+                  data-tutorial="share-button"
                   onClick={() => handleShare(v)}
                 >
                   <FaShare />
@@ -1637,6 +1642,7 @@ export default function VideoFeed() {
                 )}
                 <button
                   onClick={() => setBookingVideo(v)}
+                  data-tutorial="book-service-button"
                   className="bg-green-500 hover:bg-green-600 text-white px-3 py-1.5 rounded-full text-xs shadow-md"
                 >
                   Book Service

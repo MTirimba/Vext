@@ -2,6 +2,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { auth, db, storage } from '../../lib/firebase';
 import { useAuthState } from 'react-firebase-hooks/auth';
 import { doc, updateDoc, getDoc, setDoc } from 'firebase/firestore';
@@ -9,6 +10,7 @@ import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import PhoneInput from 'react-phone-number-input';
 import 'react-phone-number-input/style.css';
 import LocationPicker from '@/components/LocationPicker';
+import { useTutorialFlag } from '@/hooks/useTutorialFlag';
 
 type DayMinutes = { start: string; end: string }; // "HH:mm" 24h
 type BusinessHours = Partial<Record<number, DayMinutes>>; // 0=Sun..6=Sat
@@ -89,6 +91,9 @@ async function claimBusinessUsername(handleRaw: string, uid: string) {
 
 export default function ProfilePage() {
   const [user] = useAuthState(auth);
+  const router = useRouter();
+  const { resetSeen: resetVisitorTutorial } = useTutorialFlag('visitor', user?.uid ?? null);
+  const { resetSeen: resetProviderTutorial } = useTutorialFlag('provider', user?.uid ?? null);
 
   // Basic fields
   const [isProvider, setIsProvider] = useState(false);
@@ -693,6 +698,41 @@ export default function ProfilePage() {
       >
         Save Changes
       </button>
+
+      <div className="border rounded-lg p-4 mt-6">
+        <h3 className="text-sm font-semibold text-gray-900 mb-1">
+          Help & tutorials
+        </h3>
+        <p className="text-xs text-gray-500 mb-3">
+          Replay the walkthrough anytime — it'll pop up the next time you
+          visit the relevant page.
+        </p>
+        <div className="flex flex-col gap-2">
+          <button
+            type="button"
+            onClick={async () => {
+              await resetVisitorTutorial();
+              router.push('/');
+            }}
+            className="px-3 py-2 rounded border border-gray-300 text-sm text-gray-700 hover:bg-gray-50 text-left"
+          >
+            Replay the app tutorial (feed, booking, search)
+          </button>
+          {isProvider && (
+            <button
+              type="button"
+              onClick={async () => {
+                await resetProviderTutorial();
+                if (businessUsername) router.push(`/${businessUsername}`);
+              }}
+              disabled={!businessUsername}
+              className="px-3 py-2 rounded border border-gray-300 text-sm text-gray-700 hover:bg-gray-50 text-left disabled:opacity-50"
+            >
+              Replay the provider tutorial (managing your services)
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

@@ -22,6 +22,9 @@ import { db, auth } from '@/lib/firebase';
 import { EditVideoModal } from '@/components/EditVideoModal';
 import { PostFeedModal } from '@/components/PostFeedModal';
 import BookingModal from '@/components/BookingModal';
+import TutorialChat from '@/components/TutorialChat';
+import { useTutorialFlag } from '@/hooks/useTutorialFlag';
+import { PROVIDER_TUTORIAL_STEPS } from '@/lib/tutorialSteps';
 import {
   FiEdit2,
   FiTrash2,
@@ -195,6 +198,23 @@ export default function BusinessHandlePage() {
   const [markupConfig, setMarkupConfig] = useState<MarkupConfig | null>(null);
 
   const isOwner = resolvedUid && user?.uid === resolvedUid;
+
+  // 🆕 Provider tutorial — shown the first time a provider views their own
+  // public profile (isOwner). Separate flag from the visitor tutorial, so
+  // someone who's already seen the general feed tour still gets this one
+  // once they have something of their own to manage.
+  const {
+    loading: providerTutorialLoading,
+    seen: providerTutorialSeen,
+    markSeen: markProviderTutorialSeen,
+    replayToken: providerTutorialReplayToken,
+  } = useTutorialFlag('provider', isOwner ? user?.uid ?? null : null);
+  const [providerTutorialOpen, setProviderTutorialOpen] = useState(false);
+
+  useEffect(() => {
+    if (!isOwner || providerTutorialLoading || providerTutorialSeen) return;
+    setProviderTutorialOpen(true);
+  }, [isOwner, providerTutorialLoading, providerTutorialSeen]);
 
   // ---------- helpers ----------
   const firstMedia = (v: VideoDoc): MediaItem | null => {
@@ -689,6 +709,7 @@ export default function BusinessHandlePage() {
                 <button
                   type="button"
                   onClick={() => setServicesListOpen(true)}
+                  data-tutorial="services-offered-button"
                   className="px-3 py-1 rounded-full border border-gray-300 text-xs font-medium text-gray-700 hover:bg-gray-100"
                 >
                   Services offered
@@ -1130,6 +1151,16 @@ export default function BusinessHandlePage() {
           avatarUrl={avatarUrl}
         />
       )}
+
+      <TutorialChat
+        steps={PROVIDER_TUTORIAL_STEPS}
+        open={providerTutorialOpen}
+        resetKey={providerTutorialReplayToken}
+        onFinish={() => {
+          setProviderTutorialOpen(false);
+          markProviderTutorialSeen();
+        }}
+      />
     </div>
   );
 }
