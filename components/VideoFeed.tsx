@@ -1038,7 +1038,7 @@ export default function VideoFeed() {
 
   return (
     <div
-      className="relative h-screen min-h-[100dvh] w-full bg-black text-white overflow-hidden"
+      className="relative h-[100dvh] w-full bg-black text-white overflow-hidden"
       style={{
         // Respect iOS safe area and still give some breathing room on Android
         paddingBottom: "env(safe-area-inset-bottom, 0px)",
@@ -1415,7 +1415,7 @@ export default function VideoFeed() {
       {/* Scroll-snap container */}
       <div
         ref={sliderRef}
-        className="h-screen min-h-[100dvh] overflow-y-scroll snap-y snap-mandatory scroll-smooth [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]"
+        className="h-[100dvh] overflow-y-scroll snap-y snap-mandatory scroll-smooth [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]"
       >
         {filteredVideos.map((v, i) => {
           const up = userProfiles[v.userId || ""] || {};
@@ -1451,7 +1451,7 @@ export default function VideoFeed() {
           return (
             <div
               key={`${v.id}-${i}`}
-              className="relative h-screen min-h-[100dvh] flex items-center justify-center snap-start"
+              className="relative h-[100dvh] flex items-center justify-center snap-start"
             >
               {hasCarousel && (
                 <div
@@ -1467,7 +1467,7 @@ export default function VideoFeed() {
               )}
 
               <div
-                className="relative max-h-screen max-w-full z-40"
+                className="relative max-h-[100dvh] max-w-full z-40"
                 onTouchStart={(e) => {
                   const t = e.touches[0];
                   touchStartXRef.current[v.id] = t.clientX;
@@ -1504,7 +1504,7 @@ export default function VideoFeed() {
                   <img
                     src={active.url}
                     alt={v.title || "service image"}
-                    className="max-h-screen max-w-full object-contain select-none"
+                    className="max-h-[100dvh] max-w-full object-contain select-none"
                     draggable={false}
                   />
                 ) : (
@@ -1515,7 +1515,7 @@ export default function VideoFeed() {
                     loop
                     playsInline
                     onClick={togglePlay}
-                    className="max-h-screen max-w-full object-contain"
+                    className="max-h-[100dvh] max-w-full object-contain"
                   />
                 )}
               </div>
@@ -1549,9 +1549,14 @@ export default function VideoFeed() {
                   <div
                     className="absolute left-1/2 -translate-x-1/2 z-50 flex space-x-1"
                     style={{
-                      // move dot indicators above nav bar / gesture area
-                      bottom:
-                        "calc(env(safe-area-inset-bottom, 0px) + 3.25rem)",
+                      // Small cosmetic clearance above the true bottom edge —
+                      // NOT a nav-bar dodge. 100dvh already excludes the
+                      // browser's own toolbar (that's what dvh means), so a
+                      // normal browser tab has nothing overlaying content
+                      // down here; env(safe-area-inset-bottom) alone covers
+                      // the real case (a notch/home-indicator overlay, which
+                      // only actually happens in installed/standalone mode).
+                      bottom: "calc(env(safe-area-inset-bottom, 0px) + 0.75rem)",
                     }}
                   >
                     {media.map((_, idx) => (
@@ -1595,9 +1600,12 @@ export default function VideoFeed() {
               <div
                 className="pointer-events-auto absolute right-3 flex flex-col items-end space-y-3 z-50"
                 style={{
-                  // push controls well above Android nav bar and iOS home pill
-                  bottom:
-                    "calc(env(safe-area-inset-bottom, 0px) + 4.5rem)",
+                  // Small cosmetic clearance above the true bottom edge —
+                  // NOT a nav-bar dodge (see the dot-indicator block above
+                  // for why the old 4.5rem buffer was double-compensating
+                  // for space the browser's own dvh viewport already
+                  // excludes in normal tab browsing).
+                  bottom: "calc(env(safe-area-inset-bottom, 0px) + 1rem)",
                 }}
               >
                 <button onClick={() => handleLike(v.id)} className="text-xl">
@@ -1665,9 +1673,9 @@ export default function VideoFeed() {
                 <div
                   className="absolute left-3 max-w-[60%] overflow-hidden text-ellipsis z-50"
                   style={{
-                    // keep title/description/price aligned with buttons
-                    bottom:
-                      "calc(env(safe-area-inset-bottom, 0px) + 4.5rem)",
+                    // keep title/description/price aligned with the button
+                    // rail above — same reduced buffer, same reasoning
+                    bottom: "calc(env(safe-area-inset-bottom, 0px) + 1rem)",
                   }}
                 >
                   {v.title && (
