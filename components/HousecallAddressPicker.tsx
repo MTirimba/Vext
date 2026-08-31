@@ -7,6 +7,7 @@ export interface HousecallAddress {
   lng: number | null;
   street: string;
   town: string;
+  city: string;
   county: string;
   landmark: string;
   building: string;
@@ -19,6 +20,7 @@ export const EMPTY_HOUSECALL_ADDRESS: HousecallAddress = {
   lng: null,
   street: '',
   town: '',
+  city: '',
   county: '',
   landmark: '',
   building: '',
@@ -42,6 +44,7 @@ export function formatHousecallAddress(a: HousecallAddress): string {
     a.landmark && `near ${a.landmark.trim()}`,
     a.street && a.street.trim(),
     a.town && a.town.trim(),
+    a.city && a.city.trim(),
     a.county && a.county.trim(),
   ]
     .filter(Boolean)
@@ -54,7 +57,7 @@ export function formatHousecallAddress(a: HousecallAddress): string {
 // unit-level fields alone aren't enough for a provider to actually find the
 // place.
 export function isHousecallAddressComplete(a: HousecallAddress): boolean {
-  return a.lat != null && a.lng != null && (!!a.town || !!a.street);
+  return a.lat != null && a.lng != null && (!!a.town || !!a.street || !!a.city);
 }
 
 interface HousecallAddressPickerProps {
@@ -79,6 +82,7 @@ export default function HousecallAddressPicker({
       // (and anything the client has already hand-edited) alone.
       street: address.street ?? value.street,
       town: address.town ?? value.town,
+      city: address.city ?? value.city,
       county: address.county ?? value.county,
       landmark: address.landmark ?? value.landmark,
     });
@@ -118,8 +122,9 @@ export default function HousecallAddressPicker({
       <div className="grid grid-cols-2 gap-2">
         {field('street', 'Road / street')}
         {field('landmark', 'Nearest landmark')}
-        {field('town', 'Town')}
-        {field('county', 'County / city')}
+        {field('town', 'Town / area')}
+        {field('city', 'City')}
+        {field('county', 'County')}
       </div>
 
       <div>

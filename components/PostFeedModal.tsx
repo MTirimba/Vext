@@ -56,6 +56,7 @@ export interface CreatorProfile {
   building?: string;
   room?: string;
   town?: string;
+  city?: string;
   county?: string;
   location?: string;
   lat?: number;
@@ -74,6 +75,7 @@ export function buildAddress(p?: CreatorProfile) {
   if (p.room) parts.push(p.room);
   if (p.street) parts.push(p.street);
   if (p.town) parts.push(p.town);
+  if (p.city) parts.push(p.city);
   if (p.county) parts.push(p.county);
   if (!parts.length && p.location) parts.push(p.location);
   return parts.join(', ');

@@ -46,6 +46,7 @@ interface UserProfile {
   building?: string;
   room?: string;
   town?: string;
+  city?: string;
   county?: string;
   lat?: number;
   lng?: number;
@@ -130,6 +131,7 @@ export default function CreatorProfilePage() {
     if (profile.room) parts.push(profile.room);
     if (profile.street) parts.push(profile.street);
     if (profile.town) parts.push(profile.town);
+    if (profile.city) parts.push(profile.city);
     if (profile.county) parts.push(profile.county);
     if (parts.length === 0 && profile.location) parts.push(profile.location);
 

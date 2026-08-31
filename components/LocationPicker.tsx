@@ -6,6 +6,7 @@ import { useLoadScript, GoogleMap, Marker } from '@react-google-maps/api';
 type AddressInfo = {
   street?: string;
   town?: string;
+  city?: string;
   county?: string;
   landmark?: string;
 };
@@ -45,6 +46,7 @@ export default function LocationPicker({
         const components = results[0].address_components || [];
         let street = '';
         let town = '';
+        let city = '';
         let county = '';
 
         components.forEach((c: any) => {
@@ -56,13 +58,21 @@ export default function LocationPicker({
             types.includes('sublocality_level_1') ||
             types.includes('neighborhood')
           ) {
+            // A smaller area/estate within a city — e.g. "Kilimani",
+            // "Westlands" — kept distinct from the city itself below.
             if (!town) town = c.long_name;
           } else if (types.includes('locality')) {
-            if (!town) town = c.long_name;
+            // The city/major town itself — e.g. "Nairobi", "Mombasa".
+            city = c.long_name;
           } else if (types.includes('administrative_area_level_2')) {
             county = c.long_name;
           }
         });
+
+        // Fallback: if there was no sublocality/neighborhood at all (common
+        // outside the bigger cities), don't leave town blank when we at
+        // least have a city — better than an empty field.
+        if (!town && city) town = city;
 
         // Best-effort nearby landmark: Google returns several results for the
         // same point, ordered most-specific first. A named point of interest
@@ -87,6 +97,7 @@ export default function LocationPicker({
         onLocationSelect(lat, lng, {
           street,
           town,
+          city,
           county,
           landmark,
         });

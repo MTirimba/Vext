@@ -70,6 +70,7 @@ interface UserProfile {
   location?: string;
   street?: string;
   town?: string;
+  city?: string;
   county?: string;
 
   building?: string;
@@ -453,7 +454,7 @@ export default function ClientBookings() {
     if (p.businessLocationType === "mobile_only") {
       return "Mobile service — comes to your location";
     }
-    const parts = [p.street, p.town, p.county].filter(Boolean);
+    const parts = [p.street, p.town, p.city, p.county].filter(Boolean);
     return parts.length ? parts.join(", ") : p.location || "";
   };
 

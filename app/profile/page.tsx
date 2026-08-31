@@ -131,6 +131,7 @@ export default function ProfilePage() {
   const [lng, setLng] = useState<number | null>(null);
   const [street, setStreet] = useState('');
   const [town, setTown] = useState('');
+  const [city, setCity] = useState('');
   const [county, setCounty] = useState('');
 
   // New: per-day business hours editor state
@@ -196,6 +197,7 @@ export default function ProfilePage() {
         setLng(d.lng);
         setStreet(d.street || '');
         setTown(d.town || '');
+        setCity(d.city || '');
         setCounty(d.county || '');
       }
 
@@ -284,6 +286,7 @@ export default function ProfilePage() {
         updates.lng = lng;
         updates.street = street;
         updates.town = town;
+        updates.city = city;
         updates.county = county;
       }
 
@@ -596,9 +599,52 @@ export default function ProfilePage() {
               setLng(lngVal);
               setStreet(addr.street || '');
               setTown(addr.town || '');
+              setCity(addr.city || '');
               setCounty(addr.county || '');
             }}
           />
+
+          {/* Auto-filled from the pin above — editable in case the map
+              got something wrong, same pattern as the client-facing
+              housecall address picker. */}
+          <div className="grid grid-cols-2 gap-2 text-sm">
+            <label className="block">
+              <span className="block text-xs text-gray-500 mb-0.5">Road / street</span>
+              <input
+                type="text"
+                className="w-full border rounded px-2 py-1"
+                value={street}
+                onChange={(e) => setStreet(e.target.value)}
+              />
+            </label>
+            <label className="block">
+              <span className="block text-xs text-gray-500 mb-0.5">Town / area</span>
+              <input
+                type="text"
+                className="w-full border rounded px-2 py-1"
+                value={town}
+                onChange={(e) => setTown(e.target.value)}
+              />
+            </label>
+            <label className="block">
+              <span className="block text-xs text-gray-500 mb-0.5">City</span>
+              <input
+                type="text"
+                className="w-full border rounded px-2 py-1"
+                value={city}
+                onChange={(e) => setCity(e.target.value)}
+              />
+            </label>
+            <label className="block">
+              <span className="block text-xs text-gray-500 mb-0.5">County</span>
+              <input
+                type="text"
+                className="w-full border rounded px-2 py-1"
+                value={county}
+                onChange={(e) => setCounty(e.target.value)}
+              />
+            </label>
+          </div>
 
           {/* Business Phone */}
           <label className="block">

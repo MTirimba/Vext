@@ -144,6 +144,7 @@ export async function POST(req: NextRequest) {
             lng: typeof housecallGeo.lng === "number" ? housecallGeo.lng : null,
             street: String(housecallGeo.street || ""),
             town: String(housecallGeo.town || ""),
+            city: String(housecallGeo.city || ""),
             county: String(housecallGeo.county || ""),
             landmark: String(housecallGeo.landmark || ""),
             building: String(housecallGeo.building || ""),
