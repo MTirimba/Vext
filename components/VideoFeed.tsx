@@ -1219,6 +1219,7 @@ export default function VideoFeed() {
                           router.push("/wallet");
                           setDropdownOpen(false);
                         }}
+                        data-tutorial="wallet-link"
                         className="block w-full px-2 py-1 hover:bg-gray-700 rounded mb-1"
                       >
                         Provider Wallet
@@ -1248,6 +1249,16 @@ export default function VideoFeed() {
                       </button>
                     </>
                   )}
+
+                  <button
+                    onClick={() => {
+                      router.push("/profile#help-tutorials");
+                      setDropdownOpen(false);
+                    }}
+                    className="block w-full px-2 py-1 hover:bg-gray-700 rounded mb-1"
+                  >
+                    Help & Tutorials
+                  </button>
 
                   <button
                     onClick={() => {

@@ -699,7 +699,7 @@ export default function ProfilePage() {
         Save Changes
       </button>
 
-      <div className="border rounded-lg p-4 mt-6">
+      <div id="help-tutorials" className="border rounded-lg p-4 mt-6 scroll-mt-6">
         <h3 className="text-sm font-semibold text-gray-900 mb-1">
           Help & tutorials
         </h3>

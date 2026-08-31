@@ -81,6 +81,14 @@ export const PROVIDER_TUTORIAL_STEPS: TutorialStep[] = [
     message: "Post videos of your work from the feed — clients book directly from what they see.",
   },
   {
+    id: "wallet",
+    // No live target here — this step runs on the provider's own /[handle]
+    // page, but the wallet-link button lives inside VideoFeed's dropdown
+    // menu on the main feed page, so there's nothing on THIS page to
+    // spotlight. Message-only, same as the closing "settings" step below.
+    message: "Every payment you're owed lands in your Wallet automatically. Tap your profile icon on the main feed → Provider Wallet anytime to check your balance and withdraw to M-Pesa.",
+  },
+  {
     id: "settings",
     message: "Business details, your location, and mobile-service settings all live in your Profile page — tap the profile icon anytime to get there.",
   },
