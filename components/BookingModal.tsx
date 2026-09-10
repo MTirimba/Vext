@@ -52,6 +52,7 @@ interface Addon {
 interface VideoDoc {
   id?: string;
   userId?: string;
+  title?: string;
   serviceCost?: number;
   addons?: Addon[];
   specialInstructions?: string | null;
@@ -665,6 +666,7 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
         clientId: user!.uid,
         providerId: video.userId,
         videoId: video.id || "",
+        serviceName: video.title || "",
         date: dateISO,
         time: selectedTime,
         subtotal: Math.round(subtotalRaw * 100) / 100,

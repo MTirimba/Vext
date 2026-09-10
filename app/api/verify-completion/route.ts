@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
 import { requireAuth } from "@/lib/requireAuth";
+import { sendServiceCompletedNotification } from "@/lib/whatsappNotifications";
 import crypto from "crypto";
 
 // Reuse same hashing logic as save-booking
@@ -71,6 +72,21 @@ export async function POST(req: NextRequest) {
     });
 
     // NOTE: Payment logic is untouched. This just flips the "funds can now be released" flag.
+
+    // 🟢 Best-effort WhatsApp notification to the client — not yet
+    // registered on Infobip (service_completed), will no-op quietly until
+    // approved.
+    try {
+      if (data.clientPhone) {
+        await sendServiceCompletedNotification({
+          clientPhone: data.clientPhone,
+          clientName: data.clientName || "there",
+          serviceName: data.serviceName || "",
+        });
+      }
+    } catch (err) {
+      console.error("verify-completion: WhatsApp notification failed", err);
+    }
 
     return NextResponse.json({ ok: true });
   } catch (err: any) {

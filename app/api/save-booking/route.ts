@@ -3,6 +3,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
 import { requireAuth } from "@/lib/requireAuth";
 import { computeLogisticsFee, parseLogisticsConfig } from "@/lib/logistics";
+import {
+  sendNewBookingProviderNotification,
+  sendBookingReceivedClientNotification,
+} from "@/lib/whatsappNotifications";
 import crypto from "crypto";
 
 // helper: generate short code like "42AB"
@@ -92,6 +96,7 @@ export async function POST(req: NextRequest) {
       clientId,
       providerId,
       videoId,
+      serviceName,
       date,
       time,
       addons,
@@ -292,6 +297,7 @@ export async function POST(req: NextRequest) {
       await existingRef.update({
         date,
         time,
+        serviceName: typeof serviceName === "string" && serviceName ? serviceName : existing.serviceName || "",
         total: total + logisticsFee,
         subtotal: safeSubtotal + logisticsFee,
         markupAmount: safeMarkupAmount,
@@ -349,6 +355,7 @@ export async function POST(req: NextRequest) {
       clientId,
       providerId,
       videoId,
+      serviceName: typeof serviceName === "string" ? serviceName : "",
       date,
       time,
       subtotal: safeSubtotal + logisticsFee,
@@ -381,6 +388,39 @@ export async function POST(req: NextRequest) {
       logisticsFeeFallbackUsed:
         safeServiceLocationType === "housecall" ? logisticsFeeFallbackUsed : false,
     });
+
+    // 🟢 Best-effort WhatsApp notifications — never block the booking
+    // response on these. Provider notification (new_booking_provider) is
+    // registered and live; client notification (booking_received_client)
+    // is still pending Meta approval and will just no-op quietly until then.
+    try {
+      const resolvedServiceName = typeof serviceName === "string" ? serviceName : "";
+      const providerName = provider.fullName || provider.username || "Unknown";
+
+      await sendNewBookingProviderNotification({
+        providerPhone: provider.businessPhone,
+        providerName,
+        clientName: clientName || "Client",
+        serviceName: resolvedServiceName,
+        date,
+        time,
+        bookingId: bookingRef.id,
+      });
+
+      if (clientPhone) {
+        await sendBookingReceivedClientNotification({
+          clientPhone,
+          clientName: clientName || "there",
+          providerName,
+          serviceName: resolvedServiceName,
+          date,
+          time,
+          bookingId: bookingRef.id,
+        });
+      }
+    } catch (err) {
+      console.error("save-booking: WhatsApp notification failed", err);
+    }
 
     return NextResponse.json(
       {

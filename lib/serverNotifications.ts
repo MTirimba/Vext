@@ -1,6 +1,7 @@
 // /workspaces/Vext/lib/serverNotifications.ts
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
+import { sendWhatsAppTemplateMessage } from "@/lib/whatsapp";
 import crypto from "crypto";
 // ❌ removed incorrect self-import of createUserNotification
 // import { createUserNotification } from "@/lib/serverNotifications";
@@ -194,6 +195,9 @@ export async function POST(req: NextRequest) {
 
 /**
  * ✅ Exported helper used by other API routes to create user notifications.
+ * Also fires a WhatsApp message to the same user, best-effort — a WhatsApp
+ * failure (unregistered sender/template still pending, trial number not
+ * verified, etc.) never blocks the in-app notification from being created.
  */
 export async function createUserNotification(
   userId: string,
@@ -228,6 +232,33 @@ export async function createUserNotification(
   };
 
   await ref.set(doc);
+
+  // 🟢 Best-effort WhatsApp mirror of this notification. Wrapped so any
+  // failure here (missing env config, trial number not verified, template
+  // not yet approved) never throws — the in-app notification above has
+  // already succeeded regardless.
+  try {
+    const userSnap = await adminDb.collection("users").doc(userId).get();
+    const userPhone = userSnap.exists
+      ? (userSnap.data() as any)?.businessPhone || (userSnap.data() as any)?.phone
+      : null;
+
+    if (userPhone) {
+      await sendWhatsAppTemplateMessage({
+        to: userPhone,
+        // Your own approved template controls the actual wording — this
+        // assumes a single-placeholder "utility" template along the lines
+        // of "Vext update: {{1}}". Swap the placeholder shape here once
+        // your real template is approved; until then, with only Infobip's
+        // sandbox template available, this call will just fail quietly
+        // (logged, not thrown) for anyone other than your verified test
+        // number, which is expected on the trial.
+        placeholders: [payload.message],
+      });
+    }
+  } catch (err) {
+    console.error("createUserNotification: WhatsApp send failed", err);
+  }
 
   return {
     id: ref.id,

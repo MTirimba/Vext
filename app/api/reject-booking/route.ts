@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
 import { requireAuth } from "@/lib/requireAuth";
+import { sendBookingDeclinedClientNotification } from "@/lib/whatsappNotifications";
 
 /**
  * Provider rejects a booking.
@@ -131,6 +132,22 @@ export async function POST(req: NextRequest) {
         title: "Booking marked as rejected",
         message: `You rejected booking #${shortId}.`,
       });
+
+    // 🟢 Best-effort WhatsApp notification to the client — not yet
+    // registered on Infobip (booking_declined_client), will no-op quietly
+    // until approved.
+    try {
+      if (booking.clientPhone) {
+        await sendBookingDeclinedClientNotification({
+          clientPhone: booking.clientPhone,
+          clientName: booking.clientName || "there",
+          serviceName: booking.serviceName || "",
+          providerName: booking.creatorName || "the provider",
+        });
+      }
+    } catch (err) {
+      console.error("reject-booking: WhatsApp notification failed", err);
+    }
 
     return NextResponse.json({
       success: true,

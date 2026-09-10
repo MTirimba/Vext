@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
 import { requireAuth } from "@/lib/requireAuth";
+import { sendBookingCancelledProviderNotification } from "@/lib/whatsappNotifications";
 
 /**
  * Client cancels a booking.
@@ -128,6 +129,25 @@ export async function POST(req: NextRequest) {
         title: "Client cancelled booking",
         message: `Client cancelled booking #${shortId}.`,
       });
+
+    // 🟢 Best-effort WhatsApp notification to the provider — not yet
+    // registered on Infobip (booking_cancelled_provider), will no-op
+    // quietly until approved.
+    try {
+      if (booking.providerPhone) {
+        await sendBookingCancelledProviderNotification({
+          providerPhone: booking.providerPhone,
+          providerName: booking.creatorName || "there",
+          clientName: booking.clientName || "A client",
+          serviceName: booking.serviceName || "",
+          date: booking.date,
+          time: booking.time,
+          bookingId,
+        });
+      }
+    } catch (err) {
+      console.error("cancel-booking: WhatsApp notification failed", err);
+    }
 
     return NextResponse.json({
       success: true,

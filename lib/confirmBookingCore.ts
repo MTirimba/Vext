@@ -1,5 +1,6 @@
 // /workspaces/Vext/lib/confirmBookingCore.ts
 import { adminDb } from "@/lib/firebaseAdmin";
+import { sendBookingConfirmedClientNotification } from "@/lib/whatsappNotifications";
 
 export type ConfirmBookingInput = {
   bookingId: string;
@@ -354,6 +355,24 @@ export async function confirmBookingCore(
     bookingId,
     confirmedAt: Date.now(),
   });
+
+  // 🟢 Best-effort WhatsApp notification to the client — registered and
+  // live (booking_confirmed_client). Never blocks the confirmation itself.
+  try {
+    if (booking.clientPhone) {
+      await sendBookingConfirmedClientNotification({
+        clientPhone: booking.clientPhone,
+        clientName: booking.clientName || "there",
+        providerName: booking.creatorName || "your provider",
+        serviceName: booking.serviceName || "",
+        date,
+        time,
+        bookingId,
+      });
+    }
+  } catch (err) {
+    console.error("confirmBookingCore: WhatsApp notification failed", err);
+  }
 
   return {
     ok: true,
