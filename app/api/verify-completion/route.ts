@@ -53,6 +53,23 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // 🔐 CRITICAL: never release funds for a booking that was never actually
+    // paid for. Without this check, a still-"pending" booking (payment
+    // cancelled or abandoned, but the record — and its completion PIN —
+    // still exists) could have its PIN verified here, flipping
+    // releaseVerified=true, which is the ONLY gate getProviderAvailableBalance()
+    // checks for withdrawable funds. That would let a provider withdraw
+    // money for a booking nobody ever paid for.
+    if (data.status !== "confirmed") {
+      return NextResponse.json(
+        {
+          error:
+            "This booking has not been paid for yet, so it can't be marked as completed.",
+        },
+        { status: 409 }
+      );
+    }
+
     if (data.releaseVerified) {
       return NextResponse.json(
         { error: "Booking already verified as completed" },

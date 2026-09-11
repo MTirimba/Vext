@@ -3,10 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
 import { requireAuth } from "@/lib/requireAuth";
 import { computeLogisticsFee, parseLogisticsConfig } from "@/lib/logistics";
-import {
-  sendNewBookingProviderNotification,
-  sendBookingReceivedClientNotification,
-} from "@/lib/whatsappNotifications";
+import { sendBookingReceivedClientNotification } from "@/lib/whatsappNotifications";
 import crypto from "crypto";
 
 // helper: generate short code like "42AB"
@@ -389,30 +386,19 @@ export async function POST(req: NextRequest) {
         safeServiceLocationType === "housecall" ? logisticsFeeFallbackUsed : false,
     });
 
-    // 🟢 Best-effort WhatsApp notifications — never block the booking
-    // response on these. Provider notification (new_booking_provider) is
-    // registered and live; client notification (booking_received_client)
-    // is still pending Meta approval and will just no-op quietly until then.
+    // 🟢 Best-effort WhatsApp notification to the client, confirming we got
+    // their request. The provider is deliberately NOT notified here — that
+    // used to fire immediately on creation, before any payment, which meant
+    // a provider got "New Booking Request" for bookings that were then
+    // abandoned/cancelled at the payment step. The provider now only hears
+    // about it once payment is actually confirmed (see confirmBookingCore).
     try {
-      const resolvedServiceName = typeof serviceName === "string" ? serviceName : "";
-      const providerName = provider.fullName || provider.username || "Unknown";
-
-      await sendNewBookingProviderNotification({
-        providerPhone: provider.businessPhone,
-        providerName,
-        clientName: clientName || "Client",
-        serviceName: resolvedServiceName,
-        date,
-        time,
-        bookingId: bookingRef.id,
-      });
-
       if (clientPhone) {
         await sendBookingReceivedClientNotification({
           clientPhone,
           clientName: clientName || "there",
-          providerName,
-          serviceName: resolvedServiceName,
+          providerName: provider.fullName || provider.username || "Unknown",
+          serviceName: typeof serviceName === "string" ? serviceName : "",
           date,
           time,
           bookingId: bookingRef.id,

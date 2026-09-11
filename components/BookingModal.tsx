@@ -805,23 +805,67 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
           metadata: { bookingId },
           callback(response: any) {
             (async () => {
+              // Give Paystack's own systems a moment to settle the
+              // transaction to a final "success" state — confirming
+              // immediately on popup close can race ahead of that and get
+              // rejected even for a genuinely successful payment. The
+              // webhook (server-to-server, authoritative) will confirm it
+              // independently regardless, but retrying here means the
+              // person doesn't see a scary error for a payment that's
+              // actually fine.
+              const attemptConfirm = async (): Promise<boolean> => {
+                try {
+                  const paystackIdToken = await auth.currentUser?.getIdToken();
+                  const confirmRes = await fetch("/api/confirm-booking", {
+                    method: "POST",
+                    headers: {
+                      "Content-Type": "application/json",
+                      ...(paystackIdToken
+                        ? { Authorization: `Bearer ${paystackIdToken}` }
+                        : {}),
+                    },
+                    body: JSON.stringify({
+                      bookingId,
+                      paymentRef: response.reference,
+                      method: "paystack",
+                    }),
+                  });
+                  return confirmRes.ok;
+                } catch {
+                  return false;
+                }
+              };
+
+              let confirmed = await attemptConfirm();
+              for (let i = 0; i < 3 && !confirmed; i++) {
+                await new Promise((r) => setTimeout(r, 2000));
+                confirmed = await attemptConfirm();
+              }
+
+              // Whether or not our own confirm call succeeded, the webhook
+              // is independently trying to confirm this same booking from
+              // Paystack's signed event — check the actual booking doc
+              // before deciding what to tell the person, rather than
+              // trusting only our own call's outcome.
+              if (!confirmed) {
+                try {
+                  const freshSnap = await getDoc(doc(db, "bookings", bookingId));
+                  confirmed = freshSnap.exists() && freshSnap.data()?.status === "confirmed";
+                } catch {
+                  // fall through to the not-yet-confirmed messaging below
+                }
+              }
+
+              // Refreshing the calendar's booked-times display is a nice-to-have,
+              // not a payment-integrity signal — its failure should never be
+              // conflated with "we couldn't confirm your payment".
               try {
-                const paystackIdToken = await auth.currentUser?.getIdToken();
-                await fetch("/api/confirm-booking", {
-                  method: "POST",
-                  headers: {
-                    "Content-Type": "application/json",
-                    ...(paystackIdToken
-                      ? { Authorization: `Bearer ${paystackIdToken}` }
-                      : {}),
-                  },
-                  body: JSON.stringify({
-                    bookingId,
-                    paymentRef: response.reference,
-                    method: "paystack",
-                  }),
-                });
                 await refreshBookedTimes();
+              } catch (err) {
+                console.error("refreshBookedTimes failed (non-fatal)", err);
+              }
+
+              if (confirmed) {
                 setConfirmed({
                   bookingId,
                   shortId,
@@ -833,15 +877,38 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
                     saveData.completionPin || completionPin || undefined,
                 });
                 setStep(3);
-              } catch (err) {
-                console.error("Paystack callback error", err);
+              } else {
                 alert(
-                  "Payment processed, but we could not confirm the booking automatically. Please check your bookings page.",
+                  "Payment received — we're still finalizing your booking, which can take a minute. Check your bookings page shortly; contact support if it isn't confirmed within a few minutes.",
                 );
               }
             })();
           },
-          onClose: () => {},
+          onClose: () => {
+            // Person backed out of the Paystack popup without paying. The
+            // booking record (status "pending") was already created before
+            // this popup opened — without this, it would sit there forever
+            // looking like a real booking on the bookings page with nothing
+            // ever having been paid.
+            (async () => {
+              try {
+                const idToken = await auth.currentUser?.getIdToken();
+                await fetch("/api/cancel-booking", {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}),
+                  },
+                  body: JSON.stringify({
+                    bookingId,
+                    reason: "Payment popup closed without completing payment",
+                  }),
+                });
+              } catch (err) {
+                console.error("Failed to cancel abandoned Paystack booking", err);
+              }
+            })();
+          },
         });
         handler.openIframe();
       }

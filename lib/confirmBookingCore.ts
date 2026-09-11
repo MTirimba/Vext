@@ -1,6 +1,9 @@
 // /workspaces/Vext/lib/confirmBookingCore.ts
 import { adminDb } from "@/lib/firebaseAdmin";
-import { sendBookingConfirmedClientNotification } from "@/lib/whatsappNotifications";
+import {
+  sendBookingConfirmedClientNotification,
+  sendNewBookingProviderNotification,
+} from "@/lib/whatsappNotifications";
 
 export type ConfirmBookingInput = {
   bookingId: string;
@@ -356,14 +359,28 @@ export async function confirmBookingCore(
     confirmedAt: Date.now(),
   });
 
-  // 🟢 Best-effort WhatsApp notification to the client — registered and
-  // live (booking_confirmed_client). Never blocks the confirmation itself.
+  // 🟢 Best-effort WhatsApp notifications — never block the confirmation
+  // itself. Both fire only now, at actual payment confirmation — the
+  // provider notification used to fire at booking creation (before any
+  // payment), which meant providers got "New Booking Request" for bookings
+  // that were then abandoned/cancelled at checkout.
   try {
     if (booking.clientPhone) {
       await sendBookingConfirmedClientNotification({
         clientPhone: booking.clientPhone,
         clientName: booking.clientName || "there",
         providerName: booking.creatorName || "your provider",
+        serviceName: booking.serviceName || "",
+        date,
+        time,
+        bookingId,
+      });
+    }
+    if (booking.providerPhone) {
+      await sendNewBookingProviderNotification({
+        providerPhone: booking.providerPhone,
+        providerName: booking.creatorName || "there",
+        clientName: booking.clientName || "A client",
         serviceName: booking.serviceName || "",
         date,
         time,
