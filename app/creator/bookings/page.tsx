@@ -57,6 +57,7 @@ interface Video {
 interface UserProfile {
   fullName?: string;
   name?: string;
+  businessName?: string;
   location?: string;
   building?: string;
   room?: string;
@@ -177,9 +178,14 @@ export default function CreatorBookings() {
     if (!user) return;
 
     (async () => {
+      // A booking only becomes real once payment is confirmed — never fetch
+      // "pending" (still mid-checkout) or "payment_failed" bookings here at
+      // all. Providers shouldn't see a checkout attempt that never became
+      // an actual booking.
       const qy = query(
         collection(db, "bookings"),
         where("providerId", "==", user.uid),
+        where("status", "in", ["confirmed", "completed", "rejected"]),
       );
       const snap = await getDocs(qy);
 
@@ -235,29 +241,17 @@ export default function CreatorBookings() {
       booking.client?.fullName || booking.client?.name;
     if (!clientDisplayName || !booking.clientPhone) return;
 
-    const dateStr = displayDate(booking.date);
-    const timeStr = booking.time;
+    // This only ever fires for a provider-cancelled booking now — there's
+    // no more "accepted" path (see updateStatus above).
     const providerName =
+      booking.provider?.businessName ||
       booking.provider?.name ||
       booking.provider?.fullName ||
       "Service Provider";
-    const locationDetails = `${booking.provider?.location || ""} ${
-      booking.provider?.building || ""
-    } ${booking.provider?.room || ""}`.trim();
-    const mapsLink = booking.provider?.location
-      ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-          booking.provider.location,
-        )}`
-      : "";
 
-    const message =
-      booking.status === "accepted"
-        ? `Hi ${clientDisplayName}, your booking #${
-            booking.shortId || booking.id
-          } has been ACCEPTED by ${providerName} for ${dateStr} at ${timeStr}. Location: ${locationDetails}. Map: ${mapsLink}`
-        : `Hi ${clientDisplayName}, your booking #${
-            booking.shortId || booking.id
-          } has been REJECTED by ${providerName}.`;
+    const message = `Hi ${clientDisplayName}, your booking #${
+      booking.shortId || booking.id
+    } has been CANCELLED by ${providerName}.`;
 
     await fetch("/api/send-sms", {
       method: "POST",
@@ -268,55 +262,46 @@ export default function CreatorBookings() {
 
   const updateStatus = async (
     id: string,
-    status: "accepted" | "rejected" | "completed",
+    status: "rejected",
   ) => {
     const booking = bookings.find((b) => b.id === id);
     if (!booking) return;
 
-    // ❌ Rejection → handled centrally via /api/reject-booking
-    if (status === "rejected") {
-      try {
-        const rejectIdToken = await auth.currentUser?.getIdToken();
-        const res = await fetch("/api/reject-booking", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(rejectIdToken ? { Authorization: `Bearer ${rejectIdToken}` } : {}),
-          },
-          body: JSON.stringify({
-            bookingId: id,
-          }),
-        });
+    // Cancellation → handled centrally via /api/reject-booking, which
+    // already correctly refunds the client's wallet when the booking was
+    // paid (any status other than "pending") and frees the slot. This is
+    // now the provider's only action on a confirmed booking besides
+    // completing it with the client's PIN.
+    try {
+      const rejectIdToken = await auth.currentUser?.getIdToken();
+      const res = await fetch("/api/reject-booking", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(rejectIdToken ? { Authorization: `Bearer ${rejectIdToken}` } : {}),
+        },
+        body: JSON.stringify({
+          bookingId: id,
+        }),
+      });
 
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data.error || "Failed to reject booking");
-        }
-
-        // Update local state
-        setBookings((prev) =>
-          prev.map((b) =>
-            b.id === id ? { ...b, status: "rejected" } : b,
-          ),
-        );
-
-        // SMS to client (same as before)
-        await sendClientSMS({ ...booking, status: "rejected" });
-      } catch (err: any) {
-        console.error("reject booking error:", err);
-        alert(err.message || "Could not reject booking. Try again.");
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to cancel booking");
       }
-      return;
-    }
 
-    // ✅ accepted / completed still updated client-side
-    await updateDoc(doc(db, "bookings", id), { status });
-    setBookings((prev) =>
-      prev.map((b) => (b.id === id ? { ...b, status } : b)),
-    );
+      // Update local state
+      setBookings((prev) =>
+        prev.map((b) =>
+          b.id === id ? { ...b, status: "rejected" } : b,
+        ),
+      );
 
-    if (status === "accepted") {
-      await sendClientSMS({ ...booking, status: "accepted" });
+      // SMS to client (same as before)
+      await sendClientSMS({ ...booking, status: "rejected" });
+    } catch (err: any) {
+      console.error("cancel booking error:", err);
+      alert(err.message || "Could not cancel booking. Try again.");
     }
   };
 
@@ -470,8 +455,10 @@ export default function CreatorBookings() {
 
     const providerAmount = providerDisplayAmount(b);
 
-    // Show PIN section for accepted bookings (this is now the only way to complete)
-    const showPinSection = b.status === "accepted";
+    // Show PIN section as soon as payment is confirmed — no separate
+    // provider "accept" step anymore, this is now the only gate before
+    // completion.
+    const showPinSection = b.status === "confirmed";
 
     return (
       <div key={b.id} className="border p-4 mb-4 rounded shadow">
@@ -572,19 +559,13 @@ export default function CreatorBookings() {
               <strong>Status:</strong> {b.status}
             </p>
 
-            {b.status === "pending" && (
+            {b.status === "confirmed" && (
               <div className="flex space-x-2 mt-3">
-                <button
-                  onClick={() => updateStatus(b.id, "accepted")}
-                  className="bg-green-500 text-white px-3 py-1 rounded"
-                >
-                  Accept
-                </button>
                 <button
                   onClick={() => updateStatus(b.id, "rejected")}
                   className="bg-red-500 text-white px-3 py-1 rounded"
                 >
-                  Reject
+                  Cancel booking
                 </button>
               </div>
             )}

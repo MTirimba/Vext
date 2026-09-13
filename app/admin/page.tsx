@@ -1,7 +1,7 @@
 // /workspaces/Vext/app/admin/page.tsx
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, Fragment } from 'react';
 import { useAdminGate } from '@/components/useAdminGate';
 import { db } from '@/lib/firebase';
 import {
@@ -40,7 +40,8 @@ type TabKey =
   | 'bookings'
   | 'content'
   | 'finance'
-  | 'markup';
+  | 'markup'
+  | 'transactions';
 
 export default function AdminPage() {
   const gate = useAdminGate();
@@ -60,6 +61,16 @@ export default function AdminPage() {
   const [creators, setCreators] = useState<any[]>([]);
   const [bookings, setBookings] = useState<any[]>([]);
   const [videos, setVideos] = useState<any[]>([]);
+
+  // ---------- Transactions tab: flagged bookings + per-user ledger ----------
+  const [flaggedBookings, setFlaggedBookings] = useState<any[]>([]);
+  const [flaggedLoading, setFlaggedLoading] = useState(false);
+  const [txSearchInput, setTxSearchInput] = useState('');
+  const [txSearchLoading, setTxSearchLoading] = useState(false);
+  const [txSearchError, setTxSearchError] = useState('');
+  const [txUser, setTxUser] = useState<{ id: string; data: any } | null>(null);
+  const [txEvents, setTxEvents] = useState<any[]>([]);
+  const [txExpandedId, setTxExpandedId] = useState<string | null>(null);
 
   // Markup config
   const [markupTiers, setMarkupTiers] =
@@ -282,6 +293,57 @@ export default function AdminPage() {
             v.userId,
         }));
         setVideos(enriched);
+      }
+      if (active === 'transactions') {
+        setFlaggedLoading(true);
+        try {
+          // Bookings the Paystack-verification webhook (or any future
+          // integrity check) flagged for manual review — see
+          // paymentIntegrityFlag in confirmBookingCore / the webhook.
+          const snap = await getDocs(
+            query(
+              collection(db, 'bookings'),
+              where('paymentIntegrityFlag', '!=', null),
+              orderBy('paymentIntegrityFlag'),
+              orderBy('createdAt', 'desc'),
+              limit(50),
+            ),
+          );
+          const raw = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+          const ids = new Set<string>();
+          raw.forEach((b: any) => {
+            if (b.clientId) ids.add(b.clientId);
+            if (b.providerId) ids.add(b.providerId);
+          });
+          const cache: Record<string, any> = {};
+          await Promise.all(
+            Array.from(ids).map(async (uid) => {
+              const us = await getDoc(doc(db, 'users', uid));
+              if (us.exists()) cache[uid] = us.data();
+            }),
+          );
+          setFlaggedBookings(
+            raw.map((b: any) => ({
+              ...b,
+              clientName:
+                cache[b.clientId]?.fullName ||
+                cache[b.clientId]?.name ||
+                cache[b.clientId]?.username ||
+                b.clientId,
+              providerName:
+                cache[b.providerId]?.businessName ||
+                cache[b.providerId]?.fullName ||
+                cache[b.providerId]?.name ||
+                cache[b.providerId]?.username ||
+                b.providerId,
+            })),
+          );
+        } catch (err) {
+          console.error('load flagged bookings error', err);
+          setFlaggedBookings([]);
+        } finally {
+          setFlaggedLoading(false);
+        }
       }
     })();
   }, [active, gate]);
@@ -572,6 +634,153 @@ export default function AdminPage() {
     }
   };
 
+  // ---------- Transactions: resolve a user, build their unified ledger ----------
+  const nameOf = (u: any) =>
+    u?.businessName || u?.fullName || u?.name || u?.username || u?.id;
+
+  const handleTxSearch = async () => {
+    const raw = txSearchInput.trim();
+    if (!raw) return;
+
+    setTxSearchLoading(true);
+    setTxSearchError('');
+    setTxUser(null);
+    setTxEvents([]);
+
+    try {
+      // 1) Resolve the input to a user doc — try it as a raw uid first,
+      // then fall back to matching on email / phone / username /
+      // businessUsername, whichever the admin happened to paste in.
+      let resolvedId: string | null = null;
+      let resolvedData: any = null;
+
+      const directSnap = await getDoc(doc(db, 'users', raw));
+      if (directSnap.exists()) {
+        resolvedId = directSnap.id;
+        resolvedData = directSnap.data();
+      } else {
+        const fields = ['email', 'phone', 'businessPhone', 'username', 'businessUsername'];
+        for (const field of fields) {
+          const snap = await getDocs(
+            query(collection(db, 'users'), where(field, '==', raw), limit(1)),
+          );
+          if (!snap.empty) {
+            resolvedId = snap.docs[0].id;
+            resolvedData = snap.docs[0].data();
+            break;
+          }
+        }
+      }
+
+      if (!resolvedId) {
+        setTxSearchError('No user found matching that uid, email, phone, or username.');
+        setTxSearchLoading(false);
+        return;
+      }
+
+      setTxUser({ id: resolvedId, data: resolvedData });
+
+      // 2) Pull every money-relevant record involving this user, from every
+      // place money touches them — this is the whole point of the tool, so
+      // completeness matters more than trimming it down.
+      const [asClientSnap, asProviderSnap, walletSnap, withdrawalsSnap] =
+        await Promise.all([
+          getDocs(
+            query(
+              collection(db, 'bookings'),
+              where('clientId', '==', resolvedId),
+              orderBy('createdAt', 'desc'),
+              limit(200),
+            ),
+          ),
+          getDocs(
+            query(
+              collection(db, 'bookings'),
+              where('providerId', '==', resolvedId),
+              orderBy('createdAt', 'desc'),
+              limit(200),
+            ),
+          ),
+          getDocs(
+            query(
+              collection(db, 'users', resolvedId, 'walletTransactions'),
+              orderBy('createdAt', 'desc'),
+              limit(200),
+            ),
+          ),
+          getDocs(
+            query(
+              collection(db, 'users', resolvedId, 'withdrawals'),
+              orderBy('createdAt', 'desc'),
+              limit(200),
+            ),
+          ),
+        ]);
+
+      const events: any[] = [];
+
+      asClientSnap.docs.forEach((d) => {
+        const b = d.data() as any;
+        events.push({
+          id: `booking-client-${d.id}`,
+          kind: 'Booking (as client)',
+          timestamp: b.createdAt || 0,
+          amount: b.total,
+          status: b.status,
+          label: `#${b.shortId || d.id} — ${b.serviceName || 'service'}`,
+          raw: { ...b, _docId: d.id, _path: `bookings/${d.id}` },
+        });
+      });
+
+      asProviderSnap.docs.forEach((d) => {
+        const b = d.data() as any;
+        events.push({
+          id: `booking-provider-${d.id}`,
+          kind: 'Booking (as provider)',
+          timestamp: b.createdAt || 0,
+          amount: b.providerAmount ?? b.total,
+          status: b.status,
+          label: `#${b.shortId || d.id} — ${b.serviceName || 'service'}`,
+          raw: { ...b, _docId: d.id, _path: `bookings/${d.id}` },
+        });
+      });
+
+      walletSnap.docs.forEach((d) => {
+        const w = d.data() as any;
+        events.push({
+          id: `wallet-${d.id}`,
+          kind: `Wallet ${w.type === 'debit' ? 'debit' : 'credit'}`,
+          timestamp: w.createdAt || 0,
+          amount: w.amount,
+          status: w.status || w.reason,
+          label: w.reason || w.bookingId || d.id,
+          raw: { ...w, _docId: d.id, _path: `users/${resolvedId}/walletTransactions/${d.id}` },
+        });
+      });
+
+      withdrawalsSnap.docs.forEach((d) => {
+        const w = d.data() as any;
+        events.push({
+          id: `withdrawal-${d.id}`,
+          kind: 'Withdrawal',
+          timestamp: w.createdAt || 0,
+          amount: w.amount,
+          status: w.status,
+          label: w.phoneNumber || d.id,
+          raw: { ...w, _docId: d.id, _path: `users/${resolvedId}/withdrawals/${d.id}` },
+        });
+      });
+
+      events.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+      setTxEvents(events);
+    } catch (err) {
+      console.error('transaction search error', err);
+      setTxSearchError('Something went wrong loading this user\'s transactions.');
+    } finally {
+      setTxSearchLoading(false);
+    }
+  };
+
   // ✅ gate-based early returns AFTER all hooks
   if (gate === 'loading') return <p>Checking admin access…</p>;
   if (gate === 'signedout') return <p>Please sign in to access admin.</p>;
@@ -615,6 +824,11 @@ export default function AdminPage() {
           active={active === 'markup'}
           onClick={() => setActive('markup')}
           label="Markup"
+        />
+        <TabButton
+          active={active === 'transactions'}
+          onClick={() => setActive('transactions')}
+          label="Transactions"
         />
       </div>
 
@@ -1415,6 +1629,190 @@ export default function AdminPage() {
             fee is never marked up — it's added on top of the client's total
             and paid to the provider in full.
           </p>
+        </div>
+      )}
+
+      {active === 'transactions' && (
+        <div>
+          <h2 className="mb-1 text-xl font-semibold">Money flows</h2>
+          <p className="mb-6 text-sm text-gray-600">
+            A backup you can come back to when something looks off — pull up
+            everywhere money touched a specific person (bookings on either
+            side, wallet credits/debits, withdrawals), or jump straight to
+            anything already flagged for review.
+          </p>
+
+          {/* Flagged bookings — surfaces itself, no search needed */}
+          <div className="mb-8">
+            <h3 className="mb-2 text-sm font-semibold text-gray-900">
+              Flagged for review ({flaggedBookings.length})
+            </h3>
+            <p className="mb-3 text-xs text-gray-500">
+              Bookings the Paystack payment-verification check couldn't
+              confidently confirm — see <code>paymentIntegrityFlag</code> on
+              each booking doc for why.
+            </p>
+            {flaggedLoading ? (
+              <p className="text-sm text-gray-500">Loading…</p>
+            ) : flaggedBookings.length === 0 ? (
+              <p className="text-sm text-gray-500">
+                Nothing flagged right now.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {flaggedBookings.map((b) => (
+                  <div
+                    key={b.id}
+                    className="rounded border border-amber-300 bg-amber-50 p-3 text-sm"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <span className="font-semibold">
+                          #{b.shortId || b.id}
+                        </span>{' '}
+                        <span className="text-gray-700">
+                          {b.clientName} → {b.providerName}
+                        </span>
+                      </div>
+                      <div className="font-medium">
+                        KSHS {Number(b.total || 0).toLocaleString()}
+                      </div>
+                    </div>
+                    <div className="mt-1 text-xs text-amber-800">
+                      {b.paymentIntegrityFlag}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setTxExpandedId(
+                          txExpandedId === `flag-${b.id}` ? null : `flag-${b.id}`,
+                        )
+                      }
+                      className="mt-1 text-xs text-blue-600 hover:underline"
+                    >
+                      {txExpandedId === `flag-${b.id}` ? 'Hide' : 'View'} raw
+                      record
+                    </button>
+                    {txExpandedId === `flag-${b.id}` && (
+                      <pre className="mt-2 max-h-64 overflow-auto rounded bg-white p-2 text-xs">
+                        {JSON.stringify(b, null, 2)}
+                      </pre>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <hr className="my-6" />
+
+          {/* Per-user search */}
+          <h3 className="mb-2 text-sm font-semibold text-gray-900">
+            Look up a specific person's transaction history
+          </h3>
+          <div className="mb-4 flex gap-2">
+            <input
+              type="text"
+              value={txSearchInput}
+              onChange={(e) => setTxSearchInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleTxSearch()}
+              placeholder="uid, email, phone, or username"
+              className="w-full max-w-md rounded border px-3 py-2 text-sm"
+            />
+            <button
+              type="button"
+              onClick={handleTxSearch}
+              disabled={txSearchLoading}
+              className="rounded bg-black px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
+            >
+              {txSearchLoading ? 'Searching…' : 'Search'}
+            </button>
+          </div>
+
+          {txSearchError && (
+            <p className="mb-4 text-sm text-red-600">{txSearchError}</p>
+          )}
+
+          {txUser && (
+            <div className="mb-4 rounded border bg-gray-50 p-3 text-sm">
+              <div className="font-semibold">{nameOf(txUser.data)}</div>
+              <div className="text-gray-600">
+                uid: {txUser.id}
+                {txUser.data?.email && <> • {txUser.data.email}</>}
+                {(txUser.data?.businessPhone || txUser.data?.phone) && (
+                  <> • {txUser.data.businessPhone || txUser.data.phone}</>
+                )}
+                {txUser.data?.isProvider && <> • Provider</>}
+              </div>
+            </div>
+          )}
+
+          {txEvents.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr className="border-b text-left">
+                    <th className="py-2 pr-4">When</th>
+                    <th className="py-2 pr-4">Type</th>
+                    <th className="py-2 pr-4">Reference</th>
+                    <th className="py-2 pr-4">Status</th>
+                    <th className="py-2 pr-4 text-right">Amount</th>
+                    <th className="py-2 pr-4"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {txEvents.map((ev) => (
+                    <Fragment key={ev.id}>
+                      <tr className="border-b last:border-0 align-top">
+                        <td className="py-2 pr-4 whitespace-nowrap">
+                          {ev.timestamp
+                            ? new Date(ev.timestamp).toLocaleString()
+                            : '-'}
+                        </td>
+                        <td className="py-2 pr-4">{ev.kind}</td>
+                        <td className="py-2 pr-4">{ev.label}</td>
+                        <td className="py-2 pr-4">{ev.status || '-'}</td>
+                        <td className="py-2 pr-4 text-right">
+                          {typeof ev.amount === 'number'
+                            ? `KSHS ${ev.amount.toLocaleString()}`
+                            : '-'}
+                        </td>
+                        <td className="py-2 pr-4">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setTxExpandedId(
+                                txExpandedId === ev.id ? null : ev.id,
+                              )
+                            }
+                            className="text-xs text-blue-600 hover:underline"
+                          >
+                            {txExpandedId === ev.id ? 'Hide' : 'View'} raw
+                          </button>
+                        </td>
+                      </tr>
+                      {txExpandedId === ev.id && (
+                        <tr>
+                          <td colSpan={6} className="pb-3">
+                            <pre className="max-h-64 overflow-auto rounded bg-gray-50 p-2 text-xs">
+                              {JSON.stringify(ev.raw, null, 2)}
+                            </pre>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {txUser && txEvents.length === 0 && (
+            <p className="text-sm text-gray-500">
+              No bookings, wallet activity, or withdrawals found for this
+              person.
+            </p>
+          )}
         </div>
       )}
 

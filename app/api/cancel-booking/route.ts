@@ -57,6 +57,32 @@ export async function POST(req: NextRequest) {
     const status = (booking.status || "").toLowerCase();
     const total = Number(booking.total) || 0;
 
+    // 🔐 Same guard as reject-booking: once completion is verified, the
+    // booking is final. Without this, a client could cancel — and get
+    // refunded — for a booking after the service was already delivered and
+    // the provider was already paid out for it.
+    if (booking.releaseVerified || status === "completed") {
+      return NextResponse.json(
+        {
+          error:
+            "This booking has already been completed and can no longer be cancelled.",
+        },
+        { status: 409 },
+      );
+    }
+
+    // 🗑️ A booking never becomes a real booking until payment is confirmed
+    // (status flips to "confirmed" in confirmBookingCore). If someone backs
+    // out of the payment popup or the payment never went through, this
+    // record was only ever a checkout attempt — there's nothing to refund
+    // (no wallet debit ever happened for it) and no provider to notify
+    // about a booking that never existed from their side. Delete it
+    // outright rather than recording it as a "cancelled booking".
+    if (status === "pending" || status === "payment_failed") {
+      await bookingRef.delete();
+      return NextResponse.json({ success: true, bookingId, deleted: true });
+    }
+
     // Free booked slot (if it exists)
     if (booking.date && booking.time) {
       const slotKey = `${providerId}_${booking.date}_${booking.time}`;

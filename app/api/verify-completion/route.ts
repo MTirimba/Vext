@@ -82,8 +82,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Invalid PIN" }, { status: 401 });
     }
 
-    // ✅ Mark booking as service-completed & eligible for payout
+    // ✅ Mark booking as service-completed & eligible for payout. Persisting
+    // status:"completed" here (not just releaseVerified) matters — without
+    // it, the booking stayed looking "confirmed" forever in Firestore, so a
+    // completed booking was indistinguishable from one still awaiting
+    // service, and (see reject-booking / cancel-booking) nothing stopped
+    // either party from "cancelling" — and refunding — a booking after the
+    // service was already delivered and paid out.
     await bookingRef.update({
+      status: "completed",
       releaseVerified: true,
       releaseVerifiedAt: Date.now(),
     });

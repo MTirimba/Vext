@@ -3,9 +3,15 @@
 // Backstop for abandoned payments. BookingModal now calls /api/cancel-booking
 // when someone explicitly backs out of the Paystack popup, and M-Pesa's own
 // callback marks a failed/cancelled STK push as "payment_failed" — but
-// neither covers someone just closing the browser tab entirely mid-payment,
-// which leaves a booking sitting in "pending" forever, indistinguishable
-// from a real upcoming booking on the bookings page.
+// neither covers someone just closing the browser tab entirely mid-payment.
+// A booking that never reached "confirmed" never actually happened — it's
+// a checkout attempt, not a booking — so this deletes it outright rather
+// than leaving any record behind, same as cancel-booking/reject-booking do
+// for the "pending"/"payment_failed" case.
+//
+// Runs against both "pending" (still mid-checkout, abandoned) and
+// "payment_failed" (M-Pesa declined/cancelled) — neither should linger
+// forever, and neither was ever a real booking.
 //
 // Call this on a schedule (see the Vercel Cron example in
 // app/api/cron/booking-reminders/route.ts for the config shape) — every
@@ -14,8 +20,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
 
-// Anything still "pending" longer than this was abandoned — no realistic
-// payment flow (M-Pesa STK, Paystack checkout) takes anywhere near this long.
+// No realistic payment flow (M-Pesa STK, Paystack checkout) takes anywhere
+// near this long — anything still stuck here was abandoned.
 const STALE_AFTER_MS = 30 * 60 * 1000; // 30 minutes
 
 function isAuthorized(req: NextRequest): boolean {
@@ -28,6 +34,27 @@ function isAuthorized(req: NextRequest): boolean {
   return req.nextUrl.searchParams.get("secret") === secret;
 }
 
+async function expireStatus(status: string, cutoff: number): Promise<number> {
+  const snap = await adminDb
+    .collection("bookings")
+    .where("status", "==", status)
+    .where("createdAt", "<=", cutoff)
+    .get();
+
+  let expired = 0;
+
+  for (const bookingDoc of snap.docs) {
+    try {
+      await bookingDoc.ref.delete();
+      expired++;
+    } catch (err) {
+      console.error(`expire-stale-bookings: failed for ${bookingDoc.id}`, err);
+    }
+  }
+
+  return expired;
+}
+
 export async function GET(req: NextRequest) {
   if (!isAuthorized(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -35,40 +62,15 @@ export async function GET(req: NextRequest) {
 
   const cutoff = Date.now() - STALE_AFTER_MS;
 
-  const snap = await adminDb
-    .collection("bookings")
-    .where("status", "==", "pending")
-    .where("createdAt", "<=", cutoff)
-    .get();
+  const [expiredPending, expiredFailed] = await Promise.all([
+    expireStatus("pending", cutoff),
+    expireStatus("payment_failed", cutoff),
+  ]);
 
-  let expired = 0;
-
-  for (const bookingDoc of snap.docs) {
-    const booking = bookingDoc.data() as any;
-    try {
-      // No payment was ever confirmed for a "pending" booking, so there's
-      // nothing to refund — this mirrors cancel-booking's own logic for
-      // the pending case, just triggered by staleness instead of a person
-      // clicking cancel.
-      await bookingDoc.ref.update({
-        status: "cancelled",
-        cancelledAt: Date.now(),
-        cancelledBy: "system",
-        cancelledReason: "Payment abandoned — no confirmation within 30 minutes",
-      });
-
-      if (booking.providerId && booking.date && booking.time) {
-        const slotKey = `${booking.providerId}_${booking.date}_${booking.time}`;
-        const slotRef = adminDb.collection("booked_slots").doc(slotKey);
-        const slotSnap = await slotRef.get();
-        if (slotSnap.exists) await slotRef.delete();
-      }
-
-      expired++;
-    } catch (err) {
-      console.error(`expire-stale-bookings: failed for ${bookingDoc.id}`, err);
-    }
-  }
-
-  return NextResponse.json({ ok: true, expired, checked: snap.size });
+  return NextResponse.json({
+    ok: true,
+    expired: expiredPending + expiredFailed,
+    expiredPending,
+    expiredFailed,
+  });
 }

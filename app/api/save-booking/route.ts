@@ -3,7 +3,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
 import { requireAuth } from "@/lib/requireAuth";
 import { computeLogisticsFee, parseLogisticsConfig } from "@/lib/logistics";
-import { sendBookingReceivedClientNotification } from "@/lib/whatsappNotifications";
 import crypto from "crypto";
 
 // helper: generate short code like "42AB"
@@ -368,7 +367,7 @@ export async function POST(req: NextRequest) {
       clientPhone: clientPhone || null,
       providerPhone: provider.businessPhone,
       clientName: clientName || "",
-      creatorName: provider.fullName || provider.username || "Unknown",
+      creatorName: provider.businessName || provider.fullName || provider.username || "Unknown",
       shortId, // ✅ store memorable ID
       completionPinHash, // 🔐 hashed PIN used for verification
       completionPin, // 🔐 plain PIN for client-facing UIs (you can drop later if you want client-only storage)
@@ -386,27 +385,13 @@ export async function POST(req: NextRequest) {
         safeServiceLocationType === "housecall" ? logisticsFeeFallbackUsed : false,
     });
 
-    // 🟢 Best-effort WhatsApp notification to the client, confirming we got
-    // their request. The provider is deliberately NOT notified here — that
-    // used to fire immediately on creation, before any payment, which meant
-    // a provider got "New Booking Request" for bookings that were then
-    // abandoned/cancelled at the payment step. The provider now only hears
-    // about it once payment is actually confirmed (see confirmBookingCore).
-    try {
-      if (clientPhone) {
-        await sendBookingReceivedClientNotification({
-          clientPhone,
-          clientName: clientName || "there",
-          providerName: provider.fullName || provider.username || "Unknown",
-          serviceName: typeof serviceName === "string" ? serviceName : "",
-          date,
-          time,
-          bookingId: bookingRef.id,
-        });
-      }
-    } catch (err) {
-      console.error("save-booking: WhatsApp notification failed", err);
-    }
+    // No WhatsApp notification fires here anymore — creating a "pending"
+    // booking just means checkout has started, not that anything real has
+    // happened yet. Both the client's confirmation and the provider's new-
+    // booking alert now fire together, once, at actual payment confirmation
+    // (see confirmBookingCore) — there's no separate provider "accept" step
+    // to wait for either; a confirmed (paid) booking is immediately
+    // actionable by the provider.
 
     return NextResponse.json(
       {

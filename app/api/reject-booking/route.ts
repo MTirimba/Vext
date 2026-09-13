@@ -58,6 +58,34 @@ export async function POST(req: NextRequest) {
     const status = (booking.status || "").toLowerCase();
     const total = Number(booking.total) || 0;
 
+    // 🔐 Once a booking's completion PIN has been verified, it's final — the
+    // service was delivered and (per releaseVerified) the provider is
+    // already eligible to withdraw for it. Without this check, a provider
+    // could "cancel" a booking after completing it, refunding the client's
+    // wallet in full while still keeping the withdrawable earnings from the
+    // same booking — free money at the platform's expense.
+    if (booking.releaseVerified || status === "completed") {
+      return NextResponse.json(
+        {
+          error:
+            "This booking has already been completed and can no longer be cancelled.",
+        },
+        { status: 409 },
+      );
+    }
+
+    // 🗑️ Defensive guard, matching cancel-booking: a provider should never
+    // be able to "reject" a booking that never actually became one (still
+    // pending/never paid) — nothing to refund, and this route's own
+    // notifications would otherwise tell a client their nonexistent
+    // booking was rejected. In the current UI this route is only ever
+    // called on a confirmed booking, but this keeps the route itself safe
+    // regardless of caller.
+    if (status === "pending" || status === "payment_failed") {
+      await bookingRef.delete();
+      return NextResponse.json({ success: true, bookingId, deleted: true });
+    }
+
     // Free booked slot (if it exists)
     if (booking.date && booking.time) {
       const slotKey = `${providerId}_${booking.date}_${booking.time}`;

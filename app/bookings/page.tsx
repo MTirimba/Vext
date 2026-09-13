@@ -269,10 +269,12 @@ export default function ClientBookings() {
         }),
       );
 
-      // treat accepted/confirmed as active, and show rejected/cancelled in history
+      // A booking only becomes real once payment is confirmed — "pending"
+      // (still mid-checkout) and "payment_failed" bookings are checkout
+      // attempts, not bookings, and shouldn't show as either active or past.
       setActive(
         (arr as any[]).filter((b) =>
-          ["pending", "accepted", "confirmed"].includes(
+          ["confirmed"].includes(
             (b.status || "").toLowerCase(),
           ),
         ),
