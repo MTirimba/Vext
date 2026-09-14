@@ -462,26 +462,35 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
     })();
   }, [video?.userId]);
 
-  // 🔁 Live-booked times for selected date (based on bookings)
+  // 🔁 Live-booked times for selected date (based on booked_slots — the
+  // authoritative, publicly-readable availability marker created by
+  // confirmBookingCore and freed by cancel-booking/reject-booking). This
+  // used to query the `bookings` collection directly, but that collection's
+  // read rule only allows a booking's own client/provider to read it — a
+  // different, prospective client checking availability is neither, so
+  // Firestore was rejecting that entire query outright (queries fail whole
+  // if the rule can't prove every potential match is safe to read), and the
+  // error was getting silently swallowed below. Every slot always looked
+  // open as a result, regardless of what was actually booked.
   useEffect(() => {
     if (!video?.userId || !selectedDate) return;
     const dateStr = dateToISO(selectedDate);
 
-    const bookingsQuery = query(
-      collection(db, "bookings"),
+    const slotsQuery = query(
+      collection(db, "booked_slots"),
       where("providerId", "==", video.userId),
       where("date", "==", dateStr),
     );
 
     const unsub = onSnapshot(
-      bookingsQuery,
+      slotsQuery,
       (snapshot) => {
+        // A booked_slots doc's mere existence means the slot is taken —
+        // no status field to check, since cancel-booking/reject-booking
+        // delete it outright when a confirmed booking is cancelled.
         const times: string[] = [];
         snapshot.forEach((docSnap) => {
           const data = docSnap.data() as any;
-          const status = (data.status || "").toLowerCase();
-          // consider any non-rejected/non-cancelled booking as blocking
-          if (status === "rejected" || status === "cancelled") return;
           if (data.time) times.push(data.time);
         });
         setBookedTimes(times);
@@ -558,7 +567,7 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
     const dateStr = dateToISO(selectedDate);
     const snap = await getDocs(
       query(
-        collection(db, "bookings"),
+        collection(db, "booked_slots"),
         where("providerId", "==", video.userId),
         where("date", "==", dateStr),
       ),
@@ -566,8 +575,6 @@ export default function BookingModal({ video, onClose }: BookingModalProps) {
     const times: string[] = [];
     snap.forEach((docSnap) => {
       const data = docSnap.data() as any;
-      const status = (data.status || "").toLowerCase();
-      if (status === "rejected" || status === "cancelled") return;
       if (data.time) times.push(data.time);
     });
     setBookedTimes(times);

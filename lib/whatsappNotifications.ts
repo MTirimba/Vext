@@ -13,13 +13,12 @@ import { sendWhatsAppTemplateMessage, type SendWhatsAppResult } from "@/lib/what
 const REGISTERED_TEMPLATES = new Set<string>([
   "new_booking_provider",
   "booking_confirmed_client",
-  // Not yet registered — flip these on as each gets approved:
-  // "booking_received_client",
-  // "booking_declined_client",
-  // "booking_cancelled_provider",
-  // "booking_reminder_client",
-  // "booking_reminder_provider",
-  // "service_completed",
+  "booking_received_client",
+  "booking_declined_client",
+  "booking_cancelled_provider",
+  "booking_reminder_client",
+  "booking_reminder_provider",
+  "service_completed",
 ]);
 
 async function sendIfRegistered(
